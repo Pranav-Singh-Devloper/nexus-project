@@ -11,6 +11,9 @@ const projectRoutes = require('./routes/projectRoutes');
 const app = express();
 app.use(express.json());
 
+// 1. TRUST PROXY (Required for Render/Heroku to pass cookies)
+app.set('trust proxy', 1);
+
 app.use(
   cors({
     origin: process.env.CLIENT_URL, 
@@ -19,14 +22,15 @@ app.use(
   })
 );
 
-// --- CHANGED SECTION START ---
+// 2. UPDATE SESSION CONFIG
 app.use(
   session({
     secret: process.env.COOKIE_KEY,
     resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: false, // Set 'true' only if using https in production
+      secure: true, // MUST be true for cross-site cookies
+      sameSite: 'none', // MUST be 'none' to allow Vercel to read Render cookies
       maxAge: 24 * 60 * 60 * 1000 
     }
   })
