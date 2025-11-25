@@ -751,7 +751,7 @@ export interface PrismaClientOptions {
   /**
    * The default values for transactionOptions
    * maxWait ?= 2000
-   * timeout ?= 5000
+   * timeout ?= 5001
    */
   transactionOptions?: {
     maxWait?: number
