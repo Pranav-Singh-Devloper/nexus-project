@@ -22,7 +22,7 @@ tools = [tavily_tool]
 
 # Bind tools to the LLM (This tells Llama 3 "You have these tools available")
 llm = ChatGroq(
-    temperature=0, 
+    temperature=5, 
     groq_api_key=os.getenv("GROQ_API_KEY"), 
     model_name="llama-3.3-70b-versatile"
 ).bind_tools(tools)

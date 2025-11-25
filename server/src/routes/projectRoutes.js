@@ -80,7 +80,8 @@ router.post('/', requireAuth, async (req, res) => {
     
     try {
       // Call Python Microservice
-      const aiResponse = await axios.post('http://localhost:8000/start-research', {
+      const aiServiceUrl = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+      const aiResponse = await axios.post(`${aiServiceUrl}/start-research`, {
         prompt: title
       });
 

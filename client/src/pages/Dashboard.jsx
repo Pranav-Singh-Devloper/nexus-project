@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { Plus, Layout, LogOut, Search, ChevronLeft, ChevronRight, Loader } from 'lucide-react';
+import { API_URL } from '../config';
 
 const Dashboard = () => {
   const [user, setUser] = useState(null);
@@ -20,7 +21,7 @@ const Dashboard = () => {
 
   // 1. Initial Load
   useEffect(() => {
-    axios.get('http://localhost:5001/api/current_user', { withCredentials: true })
+    axios.get(`${API_URL}/api/current_user`, { withCredentials: true })
       .then(res => {
         if (!res.data) window.location.href = '/';
         setUser(res.data);
@@ -30,7 +31,7 @@ const Dashboard = () => {
   // 2. Fetch Projects (Runs whenever page/search changes)
   const fetchProjects = () => {
     setLoading(true);
-    axios.get(`http://localhost:5001/api/projects?page=${page}&limit=5&search=${search}`, { withCredentials: true })
+    axios.get(`${API_URL}/api/projects?page=${page}&limit=5&search=${search}`, { withCredentials: true })
       .then(res => {
         setProjects(res.data.projects);
         setTotalPages(res.data.pagination.pages);
@@ -50,7 +51,7 @@ const Dashboard = () => {
     if (!newTitle.trim()) return;
     setLoading(true); // Start loading
     try {
-      await axios.post('http://localhost:5001/api/projects', { title: newTitle }, { withCredentials: true });
+      await axios.post(`${API_URL}/api/projects`, { title: newTitle }, { withCredentials: true });
       setNewTitle("");
       setIsModalOpen(false);
       setPage(1); // Reset to first page
@@ -73,7 +74,7 @@ const Dashboard = () => {
         </h1>
         <div className="flex items-center gap-4">
           <img src={user.avatar} alt="User" className="w-8 h-8 rounded-full border" />
-          <a href="http://localhost:5001/api/logout" className="text-slate-500 hover:text-red-500">
+          <a href={`${API_URL}/api/logout`} className="text-slate-500 hover:text-red-500">
             <LogOut className="w-5 h-5" />
           </a>
         </div>

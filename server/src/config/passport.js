@@ -3,6 +3,8 @@ const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
+const serverUrl = process.env.SERVER_URL || 'http://localhost:5001';
+
 passport.serializeUser((user, done) => {
   done(null, user.id); // Save user ID to session
 });
@@ -17,7 +19,7 @@ passport.use(
     {
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: 'http://localhost:5001/auth/google/callback',
+      callbackURL: `${serverUrl}/auth/google/callback`,
       scope: ['profile', 'email']
     },
     async (accessToken, refreshToken, profile, done) => {
