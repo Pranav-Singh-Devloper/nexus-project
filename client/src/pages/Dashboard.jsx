@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { Plus, Layout, LogOut, Search, ChevronLeft, ChevronRight, Loader } from 'lucide-react';
+import { Plus, Layout, LogOut, Search, ChevronLeft, ChevronRight, Loader, CheckCircle, XCircle, Clock } from 'lucide-react';
 import { API_URL } from '../config';
 
 const Dashboard = () => {
@@ -18,8 +18,7 @@ const Dashboard = () => {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
 
-
-  // 1. Initial Load
+  // 1. Initial User Load
   useEffect(() => {
     axios.get(`${API_URL}/api/current_user`, { withCredentials: true })
       .then(res => {
@@ -28,39 +27,63 @@ const Dashboard = () => {
       });
   }, []);
 
-  // 2. Fetch Projects (Runs whenever page/search changes)
-  const fetchProjects = () => {
-    setLoading(true);
+  // 2. Fetch Projects Function (Updated to support background polling)
+  const fetchProjects = (isBackground = false) => {
+    // Only show big spinner if it's NOT a background refresh
+    if (!isBackground) setLoading(true);
+    
     axios.get(`${API_URL}/api/projects?page=${page}&limit=5&search=${search}`, { withCredentials: true })
       .then(res => {
         setProjects(res.data.projects);
         setTotalPages(res.data.pagination.pages);
-        setLoading(false);
+        if (!isBackground) setLoading(false);
       })
-      .catch(err => setLoading(false));
+      .catch(err => {
+        console.error(err);
+        if (!isBackground) setLoading(false);
+      });
   };
 
+  // 3. Initial Fetch & Search/Page changes
   useEffect(() => {
     fetchProjects();
-  }, [page, search]); // Dependency Array: Re-run when these change
+  }, [page, search]);
 
-  // 3. Create Project Handler
+  // 4. SMART POLLING (The Fix 🚀)
+  // If any project is "Initializing...", poll every 3 seconds until done.
+  useEffect(() => {
+    const hasActiveMissions = projects.some(p => p.status === 'Initializing...');
 
+    if (hasActiveMissions) {
+      const interval = setInterval(() => {
+        fetchProjects(true); // Pass true to avoid spinner flicker
+      }, 3000); // Poll every 3 seconds
 
+      return () => clearInterval(interval); // Cleanup on unmount/change
+    }
+  }, [projects]); // Re-evaluate whenever projects update
+
+  // 5. Create Project Handler
   const handleCreate = async () => {
     if (!newTitle.trim()) return;
-    setLoading(true); // Start loading
+    setLoading(true);
     try {
       await axios.post(`${API_URL}/api/projects`, { title: newTitle }, { withCredentials: true });
       setNewTitle("");
       setIsModalOpen(false);
-      setPage(1); // Reset to first page
-      fetchProjects(); // Refresh list to see new report
+      setPage(1);
+      fetchProjects(); // Immediate refresh
     } catch (err) {
       alert("Failed to create mission");
-    } finally {
-      setLoading(false); // Stop loading
+      setLoading(false);
     }
+  };
+
+  // Helper to render status badge
+  const renderStatus = (status) => {
+    if (status === 'Completed') return <span className="text-green-600 flex items-center gap-1 text-sm font-medium"><CheckCircle className="w-4 h-4" /> Completed</span>;
+    if (status === 'Failed') return <span className="text-red-600 flex items-center gap-1 text-sm font-medium"><XCircle className="w-4 h-4" /> Failed</span>;
+    return <span className="text-blue-600 flex items-center gap-1 text-sm font-medium animate-pulse"><Clock className="w-4 h-4" /> {status}</span>;
   };
 
   if (!user) return <div className="p-10 text-center">Loading...</div>;
@@ -118,14 +141,23 @@ const Dashboard = () => {
               <div key={p.id} className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition flex justify-between items-center">
                 <div>
                   <h3 className="font-semibold text-lg">{p.title}</h3>
-                  <p className="text-xs text-slate-400 uppercase tracking-wide mt-1">{p.status} • {new Date(p.createdAt).toLocaleDateString()}</p>
+                  <div className="mt-2 flex items-center gap-3">
+                    {renderStatus(p.status)}
+                    <span className="text-xs text-slate-400">• {new Date(p.createdAt).toLocaleDateString()}</span>
+                  </div>
                 </div>
-                <button 
-                  onClick={() => setSelectedProject(p)} // Open Modal
-                  className="text-sm font-medium text-blue-600 hover:underline"
-                >
-                  View Report →
-                </button>
+                {p.status === 'Completed' ? (
+                  <button 
+                    onClick={() => setSelectedProject(p)}
+                    className="text-sm font-medium text-black border border-black px-4 py-2 rounded-lg hover:bg-black hover:text-white transition"
+                  >
+                    View Report
+                  </button>
+                ) : (
+                  <button disabled className="text-sm font-medium text-slate-300 border border-slate-200 px-4 py-2 rounded-lg cursor-not-allowed">
+                    Processing...
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -153,13 +185,13 @@ const Dashboard = () => {
 
       {/* Create Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white p-6 rounded-xl w-full max-w-md shadow-2xl">
             <h3 className="text-xl font-bold mb-4">Initialize New Agent</h3>
             <textarea 
               className="w-full border p-3 rounded-lg mb-4 focus:ring-2 focus:ring-black outline-none"
               rows="3"
-              placeholder="e.g., Analyze the competitive landscape of vegan coffee shops in Texas..."
+              placeholder="e.g., Analyze the competitive landscape..."
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
             />
@@ -170,25 +202,23 @@ const Dashboard = () => {
           </div>
         </div>
       )}
-        {/* Report View Modal */}
-        {selectedProject && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl">
-              {/* Header */}
-              <div className="p-6 border-b flex justify-between items-center">
-                <h3 className="text-xl font-bold truncate">{selectedProject.title}</h3>
-                <button onClick={() => setSelectedProject(null)} className="text-slate-500 hover:text-black">
-                  <LogOut className="w-5 h-5" /> {/* Close Icon */}
-                </button>
-              </div>
-              
-              {/* Scrollable Content */}
-              <div className="p-6 overflow-y-auto bg-slate-50 text-slate-800 leading-relaxed whitespace-pre-wrap">
-                {selectedProject.report ? selectedProject.report : "No report generated yet."}
-              </div>
+
+      {/* Report Modal */}
+      {selectedProject && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl">
+            <div className="p-6 border-b flex justify-between items-center">
+              <h3 className="text-xl font-bold truncate">{selectedProject.title}</h3>
+              <button onClick={() => setSelectedProject(null)} className="text-slate-500 hover:text-black">
+                <XCircle className="w-6 h-6" />
+              </button>
             </div>
-  </div>
-)}
+            <div className="p-6 overflow-y-auto bg-slate-50 text-slate-800 leading-relaxed whitespace-pre-wrap font-mono text-sm">
+              {selectedProject.report || "No content generated."}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
