@@ -24,7 +24,7 @@ tools = [tavily_tool]
 llm = ChatGroq(
     temperature=1, 
     groq_api_key=os.getenv("GROQ_API_KEY"), 
-    model_name="llama-3.3-70b-versatile"
+    model_name="llama-3.1-70b-versatile"
 ).bind_tools(tools)
 
 # --- 2. Define State ---
@@ -108,7 +108,7 @@ async def start_research(request: ResearchRequest):
         # System prompt to give it a "Persona"
         system_prompt = """You are an elite business intelligence analyst. 
         Your goal is to provide a comprehensive, data-backed report.
-        ALWAYS use the search tool to find real-time data before answering.
+        U SHOULD ALWAYS use the search tool to find real-time data before answering even if you think your confidence for the answer is <90%.
         Format your final answer in clean Markdown."""
         
         initial_state = {"messages": [
