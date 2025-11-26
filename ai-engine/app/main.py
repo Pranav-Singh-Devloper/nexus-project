@@ -1,60 +1,62 @@
 import os
-import json
+import operator
+from typing import TypedDict, Annotated, List, Literal
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import TypedDict, Annotated, List, Literal
 
-# LangChain / LangGraph Imports
+# LangChain Imports
 from langchain_groq import ChatGroq
 from langchain_community.tools.tavily_search import TavilySearchResults
-from langgraph.graph import StateGraph, END
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, BaseMessage
-import operator
+from langgraph.graph import StateGraph, END
 
+# Load Env
 load_dotenv()
 
 app = FastAPI(title="Nexus AI Engine")
 
-# --- 1. Setup Tools & Model ---
+# --- 1. Setup Tools ---
 tavily_tool = TavilySearchResults(max_results=3)
 tools = [tavily_tool]
 
-# Bind tools to the LLM (This tells Llama 3 "You have these tools available")
+# --- 2. Setup Model (Llama 3.3 - The New Standard) ---
+# We use temperature=0 for strict adherence to facts.
 llm = ChatGroq(
-    temperature=1, 
+    temperature=0, 
     groq_api_key=os.getenv("GROQ_API_KEY"), 
-    model_name="llama-3.1-70b-versatile"
+    model_name="llama-3.3-70b-versatile" 
 ).bind_tools(tools)
 
-# --- 2. Define State ---
+# --- 3. Define State ---
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]
 
-# --- 3. Define Nodes ---
+# --- 4. Define Nodes ---
 
 def call_model(state: AgentState):
-    """The Brain: Decides to answer OR call a tool"""
     messages = state["messages"]
     response = llm.invoke(messages)
     return {"messages": [response]}
 
 def call_tool(state: AgentState):
-    """The Hands: Executes the tool action"""
     messages = state["messages"]
     last_message = messages[-1]
     
-    # Check if the AI actually called a tool
+    # Defensive coding: If no tool calls, skip
     if not last_message.tool_calls:
         return {"messages": []}
 
     tool_call = last_message.tool_calls[0]
     print(f"🔎 Agent is searching for: {tool_call['args']}")
     
-    # Execute Tavily Search
-    tool_output = tavily_tool.invoke(tool_call['args'])
+    # Execute Search
+    try:
+        tool_output = tavily_tool.invoke(tool_call['args'])
+    except Exception as e:
+        tool_output = f"Error during search: {str(e)}"
     
-    # Create a message confirming the tool result
     tool_message = ToolMessage(
         tool_call_id=tool_call['id'], 
         content=str(tool_output),
@@ -62,38 +64,21 @@ def call_tool(state: AgentState):
     )
     return {"messages": [tool_message]}
 
-# --- 4. Define Logic (The "Router") ---
 def should_continue(state: AgentState) -> Literal["tools", "end"]:
-    """Check if the last message has tool calls"""
     messages = state["messages"]
     last_message = messages[-1]
     
     if last_message.tool_calls:
-        return "tools"  # Loop to tool node
-    return "end"     # Stop and return answer
+        return "tools"
+    return "end"
 
-# --- 5. Build the Graph ---
+# --- 5. Build Graph ---
 workflow = StateGraph(AgentState)
-
 workflow.add_node("agent", call_model)
 workflow.add_node("tools", call_tool)
 
 workflow.set_entry_point("agent")
-
-# The Conditional Edge:
-# If AI wants to search -> Go to 'tools'
-# If AI is done -> Go to END
-workflow.add_conditional_edges(
-    "agent",
-    should_continue,
-    {
-        "tools": "tools",
-        "end": END
-    }
-)
-
-# The Loop Back:
-# After using a tool, go back to 'agent' to read the results
+workflow.add_conditional_edges("agent", should_continue, {"tools": "tools", "end": END})
 workflow.add_edge("tools", "agent")
 
 app_graph = workflow.compile()
@@ -105,24 +90,27 @@ class ResearchRequest(BaseModel):
 @app.post("/start-research")
 async def start_research(request: ResearchRequest):
     try:
-        # System prompt to give it a "Persona"
-        system_prompt = """You are an elite business intelligence analyst. 
-        Your goal is to provide a comprehensive, data-backed report.
-        U SHOULD ALWAYS use the search tool to find real-time data before answering even if you think your confidence for the answer is <90%.
-        Format your final answer in clean Markdown."""
+        # RELIABLE PROMPT STRATEGY:
+        # Don't micro-manage the model ("Always do X"). 
+        # Instead, give it a clear goal and format.
+        system_prompt = """You are an expert market researcher.
+        Your goal is to answer the user's question using real-time data.
+        If the answer requires current information (news, stocks, events), use the search tool.
+        Final Answer Format:
+        - Use clear Markdown.
+        - Cite sources if available.
+        """
         
         initial_state = {"messages": [
             SystemMessage(content=system_prompt),
             HumanMessage(content=request.prompt)
         ]}
         
-        # Run the graph (It might loop 2-3 times now!)
         final_state = await app_graph.ainvoke(initial_state)
-        
-        # Extract the very last message (The final answer)
         final_content = final_state["messages"][-1].content
+        
         return {"status": "success", "report": final_content}
         
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Server Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
