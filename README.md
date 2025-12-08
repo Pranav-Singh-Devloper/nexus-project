@@ -14,7 +14,7 @@
 ## 🔗 Live Demo (Evaluation Links)
 - **Frontend (Vercel):** [https://nexus-capstone.vercel.app](https://nexus-capstone.vercel.app)
 - **Backend API (Render):** [https://nexus-backend.onrender.com](https://nexus-backend.onrender.com)
-- **AI Engine Docs (Render):** [https://nexus-ai-engine.onrender.com/docs](https://nexus-ai-engine.onrender.com/docs)
+- **AI Engine Docs (Render):** [https://nexus-ai-engine.onrender.com/docs](https://nexus-ai-engine.onrender.com/docs)](https://nexus-ai-engine-hwdg.onrender.com/docs)
 
 ---
 
