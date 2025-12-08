@@ -7,3 +7,4 @@ langchain-community
 langgraph
 tavily-python
 pydantic
+fastembed  

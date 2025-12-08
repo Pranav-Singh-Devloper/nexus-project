@@ -3,6 +3,9 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { LogIn } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import { API_URL } from './config';
+import Profile from './pages/Profile';
+import ProjectDetails from './pages/ProjectDetails';
+import Auth from './pages/Auth';
 
 // Login Component (Internal)
 const Login = () => (
@@ -24,8 +27,10 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Login />} />
+        <Route path="/" element={<Auth />} />
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/profile" element={<Profile />} />
+        <Route path="/projects/:id" element={<ProjectDetails />} />
       </Routes>
     </BrowserRouter>
   );

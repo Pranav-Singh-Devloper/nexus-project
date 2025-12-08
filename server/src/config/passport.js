@@ -3,46 +3,47 @@ const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
-const serverUrl = process.env.SERVER_URL || 'http://localhost:5001';
-
-passport.serializeUser((user, done) => {
-  done(null, user.id); // Save user ID to session
-});
-
-passport.deserializeUser(async (id, done) => {
-  const user = await prisma.user.findUnique({ where: { id } });
-  done(null, user); // Attach user object to req.user
-});
-
 passport.use(
   new GoogleStrategy(
     {
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: `${serverUrl}/auth/google/callback`,
+      callbackURL: `${process.env.SERVER_URL || 'http://localhost:5001'}/auth/google/callback`,
       scope: ['profile', 'email']
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
-        // Check if user exists
-        const existingUser = await prisma.user.findUnique({
-          where: { googleId: profile.id },
-        });
+        const email = profile.emails[0].value;
 
-        if (existingUser) {
-          return done(null, existingUser);
+        // 1. Check if user exists by Google ID
+        let user = await prisma.user.findUnique({ where: { googleId: profile.id } });
+
+        if (!user) {
+          // 2. Check if user exists by Email (Manual Account)
+          user = await prisma.user.findUnique({ where: { email } });
+
+          if (user) {
+            // LINK ACCOUNT: Add Google ID to existing manual user
+            user = await prisma.user.update({
+              where: { id: user.id },
+              data: { 
+                googleId: profile.id,
+                avatar: user.avatar || profile.photos[0].value 
+              }
+            });
+          } else {
+            // 3. Create New User
+            user = await prisma.user.create({
+              data: {
+                googleId: profile.id,
+                email: email,
+                name: profile.displayName,
+                avatar: profile.photos[0].value,
+              },
+            });
+          }
         }
-
-        // If not, create new user
-        const newUser = await prisma.user.create({
-          data: {
-            googleId: profile.id,
-            email: profile.emails[0].value,
-            name: profile.displayName,
-            avatar: profile.photos[0].value,
-          },
-        });
-        done(null, newUser);
+        done(null, user);
       } catch (error) {
         done(error, null);
       }
