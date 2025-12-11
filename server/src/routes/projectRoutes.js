@@ -158,41 +158,59 @@ router.post('/', requireAuth, async (req, res) => {
     // B. Respond Fast
     res.send(project);
 
-    // C. Background Task (AI + Vector)
+// C. Background Task with RETRY LOGIC
     (async () => {
       if (!aiServiceUrl) return;
-      try {
-        console.log(`[AI-TASK] Starting for ${project.id}`);
-        
-        // 1. Generate Report
-        const aiResponse = await axios.post(`${aiServiceUrl}/start-research`, { prompt: title });
-        const reportText = aiResponse.data.report;
+      
+      const MAX_RETRIES = 3;
+      let attempt = 0;
+      let success = false;
 
-        // 2. Generate Embedding (Title + Summary of Report)
-        // We limit report text to 500 chars for embedding to keep it focused
-        const embedText = `${title}: ${reportText.substring(0, 500)}`;
-        const vectorRes = await axios.post(`${aiServiceUrl}/create-vector`, { text: embedText });
-        const vectorString = `[${vectorRes.data.vector.join(',')}]`;
+      while (attempt < MAX_RETRIES && !success) {
+        try {
+          attempt++;
+          console.log(`[AI-TASK] Attempt ${attempt} for ${project.id}`);
 
-        // 3. Save Report & Vector (Using Raw SQL for Vector support)
-        await prisma.$executeRaw`
-          UPDATE "Project"
-          SET status = 'Completed',
-              report = ${reportText},
-              embedding = ${vectorString}::vector
-          WHERE id = ${project.id}
-        `;
-        console.log(`[AI-TASK] Finished ${project.id}`);
+          // 1. Generate Report
+          const aiResponse = await axios.post(`${aiServiceUrl}/start-research`, { prompt: title });
+          const reportText = aiResponse.data.report;
 
-      } catch (error) {
-        console.error(`[AI-TASK] Failed: ${error.message}`);
-        await prisma.project.update({
-          where: { id: project.id },
-          data: { 
-            status: 'Failed',
-            report: `Error: ${error.message}. Please retry.`
+          // 2. Generate Embedding
+          const embedText = `${title}: ${reportText.substring(0, 500)}`;
+          const vectorRes = await axios.post(`${aiServiceUrl}/create-vector`, { text: embedText });
+          const vectorString = `[${vectorRes.data.vector.join(',')}]`;
+
+          // 3. Save to DB
+          await prisma.$executeRaw`
+            UPDATE "Project"
+            SET status = 'Completed',
+                report = ${reportText},
+                embedding = ${vectorString}::vector
+            WHERE id = ${project.id}
+          `;
+          
+          console.log(`[AI-TASK] Finished ${project.id}`);
+          success = true; // Exit loop
+
+        } catch (error) {
+          console.error(`[AI-TASK] Failed Attempt ${attempt}:`, error.message);
+          
+          // If it's a 429 (Rate Limit) or 500, wait and retry
+          if (attempt < MAX_RETRIES) {
+             const delay = attempt * 2000; // Wait 2s, then 4s, then 6s
+             console.log(`[AI-TASK] Retrying in ${delay/1000}s...`);
+             await new Promise(res => setTimeout(res, delay));
+          } else {
+            // Final Failure after all retries
+            await prisma.project.update({
+              where: { id: project.id },
+              data: { 
+                status: 'Failed',
+                report: `System is currently experiencing high traffic (Rate Limit). Please try again later.\n\nError details: ${error.message}`
+              }
+            });
           }
-        });
+        }
       }
     })();
 
