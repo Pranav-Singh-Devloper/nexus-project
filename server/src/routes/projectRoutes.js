@@ -142,17 +142,11 @@ router.get('/:id', requireAuth, async (req, res) => {
 router.post('/', requireAuth, async (req, res) => {
   const { title } = req.body;
   const aiServiceUrl = process.env.AI_SERVICE_URL;
-  // EXTRACT DATA
-  const { report: reportText, status: aiStatus } = aiResponse.data;
-
-  // DETERMINE FINAL DB STATUS
-  // If AI says "demo_mode", we save 'Demo Mode'. Otherwise 'Completed'.
-  const finalStatus = aiStatus === 'demo_mode' ? 'Demo Mode' : 'Completed';
 
   if (!title) return res.status(400).send({ error: 'Title required' });
 
   try {
-    // A. Create Draft
+    // A. Create Draft (Initial "Initializing" state)
     const project = await prisma.project.create({
       data: {
         title,
@@ -161,10 +155,10 @@ router.post('/', requireAuth, async (req, res) => {
       }
     });
 
-    // B. Respond Fast
+    // B. Respond Fast to Frontend (Fire and Forget)
     res.send(project);
 
-// C. Background Task with RETRY LOGIC
+    // C. Background Task with RETRY LOGIC
     (async () => {
       if (!aiServiceUrl) return;
       
@@ -179,14 +173,21 @@ router.post('/', requireAuth, async (req, res) => {
 
           // 1. Generate Report
           const aiResponse = await axios.post(`${aiServiceUrl}/start-research`, { prompt: title });
-          const reportText = aiResponse.data.report;
+          
+          // --- EXTRACT DATA (Moved Inside Loop) ---
+          const { report: reportText, status: aiStatus } = aiResponse.data;
+
+          // --- DETERMINE FINAL DB STATUS (Moved Inside Loop) ---
+          // If AI says "demo_mode", we save 'Demo Mode'. Otherwise 'Completed'.
+          const finalStatus = aiStatus === 'demo_mode' ? 'Demo Mode' : 'Completed';
 
           // 2. Generate Embedding
+          // (We use a snippet of the report to generate the vector)
           const embedText = `${title}: ${reportText.substring(0, 500)}`;
           const vectorRes = await axios.post(`${aiServiceUrl}/create-vector`, { text: embedText });
           const vectorString = `[${vectorRes.data.vector.join(',')}]`;
 
-          // 3. Save to DB
+          // 3. Save to DB using Raw SQL for Vector support
           await prisma.$executeRaw`
             UPDATE "Project"
             SET status = ${finalStatus},
@@ -195,7 +196,7 @@ router.post('/', requireAuth, async (req, res) => {
             WHERE id = ${project.id}
           `;
           
-          console.log(`[AI-TASK] Finished ${project.id}`);
+          console.log(`[AI-TASK] Finished ${project.id} with status: ${finalStatus}`);
           success = true; // Exit loop
 
         } catch (error) {
@@ -203,7 +204,7 @@ router.post('/', requireAuth, async (req, res) => {
           
           // If it's a 429 (Rate Limit) or 500, wait and retry
           if (attempt < MAX_RETRIES) {
-             const delay = attempt * 2000; // Wait 2s, then 4s, then 6s
+             const delay = attempt * 2000; // Exponential-ish backoff: 2s, 4s, 6s
              console.log(`[AI-TASK] Retrying in ${delay/1000}s...`);
              await new Promise(res => setTimeout(res, delay));
           } else {
