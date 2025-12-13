@@ -154,10 +154,32 @@ const Dashboard = () => {
   };
 
   // 6. Helper: Render Status Badge
-  const renderStatus = (status) => {
-    if (status === 'Completed') return <span className="text-emerald-600 flex items-center gap-1.5 text-xs font-medium bg-emerald-50 px-2 py-1 rounded-full border border-emerald-100"><CheckCircle className="w-3.5 h-3.5" /> Completed</span>;
-    if (status === 'Failed') return <span className="text-red-600 flex items-center gap-1.5 text-xs font-medium bg-red-50 px-2 py-1 rounded-full border border-red-100"><XCircle className="w-3.5 h-3.5" /> Failed</span>;
-    return <span className="text-blue-600 flex items-center gap-1.5 text-xs font-medium bg-blue-50 px-2 py-1 rounded-full border border-blue-100 animate-pulse"><Clock className="w-3.5 h-3.5" /> {status}</span>;
+const renderStatus = (status) => {
+    if (status === 'Completed') return (
+      <span className="text-emerald-600 flex items-center gap-1.5 text-xs font-medium bg-emerald-50 px-2 py-1 rounded-full border border-emerald-100">
+        <CheckCircle className="w-3.5 h-3.5" /> Completed
+      </span>
+    );
+    
+    // --- NEW CASE: DEMO MODE ---
+    if (status === 'Demo Mode') return (
+      <span className="text-amber-600 flex items-center gap-1.5 text-xs font-medium bg-amber-50 px-2 py-1 rounded-full border border-amber-100">
+        <AlertTriangle className="w-3.5 h-3.5" /> Demo Mode - Rate Limit Hit
+      </span>
+    );
+    // ---------------------------
+
+    if (status === 'Failed') return (
+      <span className="text-red-600 flex items-center gap-1.5 text-xs font-medium bg-red-50 px-2 py-1 rounded-full border border-red-100">
+        <XCircle className="w-3.5 h-3.5" /> Failed
+      </span>
+    );
+    
+    return (
+      <span className="text-blue-600 flex items-center gap-1.5 text-xs font-medium bg-blue-50 px-2 py-1 rounded-full border border-blue-100 animate-pulse">
+        <Clock className="w-3.5 h-3.5" /> {status}
+      </span>
+    );
   };
 
   if (!user) return <div className="p-10 text-center">Loading...</div>;

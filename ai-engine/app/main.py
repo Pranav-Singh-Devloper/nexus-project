@@ -118,8 +118,36 @@ async def start_research(request: ResearchRequest):
         return {"status": "success", "report": final_content}
         
     except Exception as e:
-        print(f"Agent Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+            error_msg = str(e)
+            
+            # --- FAIL-SAFE: DEMO MODE ---
+            # If the API blocks us (429), return a pre-written report so the app doesn't crash.
+            if "429" in error_msg or "RateLimit" in error_msg:
+                print(f"⚠️ Rate Limit Hit (429). Engaging Demo Mode for: {request.prompt}")
+                
+                return {
+                    "status": "demo_mode",
+                    "report": (
+                        f"# Market Intelligence Report: {request.prompt}\n\n"
+                        "**⚠️ Note:** The external AI provider is currently rate-limiting cloud traffic. "
+                        "This is a generated simulation to demonstrate system architecture.\n\n"
+                        "## 1. Executive Summary\n"
+                        "The target market is experiencing a compound annual growth rate (CAGR) of 14.5%, "
+                        "driven by technological adoption and regulatory shifts. Key players are pivoting toward "
+                        "sustainable solutions to capture emerging demand.\n\n"
+                        "## 2. Key Trends\n"
+                        "* **Digital Transformation:** 60% of incumbents are increasing IT spend.\n"
+                        "* **Supply Chain Resilience:** Localization of manufacturing is a priority.\n\n"
+                        "## 3. Strategic Recommendations\n"
+                        "Investors should focus on Series B opportunities in the infrastructure layer, "
+                        "while incumbents must accelerate M&A activity to acquire niche capabilities."
+                    )
+                }
+            # ---------------------------
+
+            # If it's a real crash (not a 429), raise the error as usual
+            print(f"Agent Error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
 
 # Endpoint 2: The Vectorizer (RESTORED!)
 @app.post("/create-vector")

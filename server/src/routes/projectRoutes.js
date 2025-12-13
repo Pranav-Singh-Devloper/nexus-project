@@ -142,6 +142,12 @@ router.get('/:id', requireAuth, async (req, res) => {
 router.post('/', requireAuth, async (req, res) => {
   const { title } = req.body;
   const aiServiceUrl = process.env.AI_SERVICE_URL;
+  // EXTRACT DATA
+  const { report: reportText, status: aiStatus } = aiResponse.data;
+
+  // DETERMINE FINAL DB STATUS
+  // If AI says "demo_mode", we save 'Demo Mode'. Otherwise 'Completed'.
+  const finalStatus = aiStatus === 'demo_mode' ? 'Demo Mode' : 'Completed';
 
   if (!title) return res.status(400).send({ error: 'Title required' });
 
@@ -183,7 +189,7 @@ router.post('/', requireAuth, async (req, res) => {
           // 3. Save to DB
           await prisma.$executeRaw`
             UPDATE "Project"
-            SET status = 'Completed',
+            SET status = ${finalStatus},
                 report = ${reportText},
                 embedding = ${vectorString}::vector
             WHERE id = ${project.id}
