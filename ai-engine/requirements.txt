@@ -8,3 +8,4 @@ langgraph
 tavily-python
 pydantic
 fastembed  
+langchain-google-genai
