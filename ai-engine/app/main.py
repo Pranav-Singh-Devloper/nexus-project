@@ -6,11 +6,14 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+# --- CHANGED: Google Imports ---
+from langchain_google_genai import ChatGoogleGenerativeAI
+
 # LangChain Imports
-from langchain_groq import ChatGroq
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, BaseMessage
 from langgraph.graph import StateGraph, END
+
 # Vector Embeddings Import
 from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 
@@ -20,7 +23,6 @@ load_dotenv()
 app = FastAPI(title="Nexus AI Engine")
 
 # --- 1. Setup Global Tools & Embeddings ---
-# Tools and Embeddings don't depend on the API key, so we keep them global.
 
 # A. Search Tool
 tavily_tool = TavilySearchResults(max_results=3)
@@ -33,21 +35,23 @@ embeddings_model = FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]
 
-# --- 3. The Agent Builder Function (Dynamic Key Support) ---
+# --- 3. The Agent Builder Function (Google Gemini Support) ---
 
 def build_research_agent(api_key: str):
     """
-    Creates a fresh instance of the LangGraph agent using a specific Groq API Key.
+    Creates a fresh instance of the LangGraph agent using a specific Google API Key.
     """
     
-    # A. Initialize LLM with the specific key
-    llm = ChatGroq(
-        temperature=0, 
-        groq_api_key=api_key, 
-        model_name="llama-3.3-70b-versatile" 
+    # --- CHANGED: Initialize Gemini instead of Groq ---
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash",
+        google_api_key=api_key,
+        temperature=0,
+        max_output_tokens=2048
     ).bind_tools(tools)
+    # --------------------------------------------------
 
-    # B. Define Nodes (Must be internal to use the specific 'llm' instance)
+    # B. Define Nodes
     
     def call_model(state: AgentState):
         messages = state["messages"]
@@ -105,15 +109,18 @@ class VectorRequest(BaseModel):
 @app.post("/start-research")
 async def start_research(request: ResearchRequest):
     
-    # 1. Define Key Rotation List
-    # Make sure you add GROQ_API_KEY_BACKUP to your .env file!
+    # 1. Define Key Rotation List (Google Keys)
+    # You can get multiple keys from different Google accounts if really needed
     api_keys = [
-        os.getenv("GROQ_API_KEY"),
-        os.getenv("GROQ_API_KEY_BACKUP"),
-        os.getenv("GROQ_API_KEY_TERTIARY") # Optional 3rd key
+        os.getenv("GOOGLE_API_KEY"),
+        os.getenv("GOOGLE_API_KEY_BACKUP") # Optional
     ]
     # Filter out empty keys
     available_keys = [k for k in api_keys if k]
+
+    if not available_keys:
+        # Fallback if no keys are set
+        available_keys = ["placeholder"] 
 
     system_prompt = """You are an expert market researcher.
     Your goal is to answer the user's question using real-time data.
@@ -131,7 +138,7 @@ async def start_research(request: ResearchRequest):
     # 2. Loop through keys
     for index, key in enumerate(available_keys):
         try:
-            print(f"🔄 Attempting research with API Key #{index + 1}...")
+            print(f"🔄 Attempting research with Google Key #{index + 1}...")
             
             # Build agent with CURRENT key
             agent_app = build_research_agent(key)
@@ -147,33 +154,23 @@ async def start_research(request: ResearchRequest):
             error_msg = str(e)
             print(f"❌ Key #{index + 1} Failed: {error_msg}")
             
-            # If it's a Rate Limit (429), CONTINUE to the next key
-            if "429" in error_msg or "RateLimit" in error_msg:
+            # Google's rate limit error code is usually 429 too
+            if "429" in error_msg or "ResourceExhausted" in error_msg:
                 continue 
             
-            # If it's a code bug (not a rate limit), break and show error
-            print(f"Agent Error (Non-RateLimit): {e}")
+            print(f"Agent Error: {e}")
             break
 
-    # 3. Fallback: Demo Mode (If ALL keys fail)
+    # 3. Fallback: Demo Mode
     print("⚠️ All API keys exhausted. Engaging Demo Mode.")
     return {
         "status": "demo_mode",
         "report": (
             f"# Market Intelligence Report (Demo Mode): {request.prompt}\n\n"
-            "**⚠️ System Notice:** All high-performance AI inference keys are currently "
-            "experiencing heavy traffic. This is a generated simulation to demonstrate "
-            "system architecture stability.\n\n"
+            "**⚠️ System Notice:** All AI providers are currently busy. "
+            "This is a generated simulation.\n\n"
             "## 1. Executive Summary\n"
-            "The target market is experiencing a compound annual growth rate (CAGR) of 14.5%, "
-            "driven by technological adoption and regulatory shifts. Key players are pivoting toward "
-            "sustainable solutions to capture emerging demand.\n\n"
-            "## 2. Key Trends\n"
-            "* **Digital Transformation:** 60% of incumbents are increasing IT spend.\n"
-            "* **Supply Chain Resilience:** Localization of manufacturing is a priority.\n\n"
-            "## 3. Strategic Recommendations\n"
-            "Investors should focus on Series B opportunities in the infrastructure layer, "
-            "while incumbents must accelerate M&A activity to acquire niche capabilities."
+            "The market is showing strong signals of recovery..."
         )
     }
 
