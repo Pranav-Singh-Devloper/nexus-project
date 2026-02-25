@@ -10,3 +10,4 @@ pydantic
 fastembed  
 langchain-google-genai
 langchain-tavily
+langchain_openai
