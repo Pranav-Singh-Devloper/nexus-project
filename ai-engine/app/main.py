@@ -10,7 +10,8 @@ from pydantic import BaseModel
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 # LangChain Imports
-from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_tavily import TavilySearch
+# from langchain_community.tools.tavily_search import TavilySearchResults (discontinued)
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, BaseMessage
 from langgraph.graph import StateGraph, END
 
@@ -25,7 +26,10 @@ app = FastAPI(title="Nexus AI Engine")
 # --- 1. Setup Global Tools & Embeddings ---
 
 # A. Search Tool
-tavily_tool = TavilySearchResults(max_results=3)
+tavily_tool = TavilySearch(
+    max_results=3,
+    search_depth = "basic"
+    )
 tools = [tavily_tool]
 
 # B. Embedding Model (Runs locally on CPU)

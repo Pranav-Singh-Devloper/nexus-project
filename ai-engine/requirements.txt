@@ -9,3 +9,4 @@ tavily-python
 pydantic
 fastembed  
 langchain-google-genai
+langchain-tavily
