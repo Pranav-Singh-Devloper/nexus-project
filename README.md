@@ -1,7 +1,7 @@
 # Nexus: Autonomous Market Intelligence Swarm 🧠 🚀
 
 ![React](https://img.shields.io/badge/Frontend-React-blue?logo=react)
-![Node](https://img-shields.io/badge/Backend-Node.js-green?logo=nodedotjs)
+![Node](https://img.shields.io/badge/Backend-Node.js-green?logo=nodedotjs)
 ![Python](https://img.shields.io/badge/AI_Engine-FastAPI-yellow?logo=fastapi)
 ![Database](https://img.shields.io/badge/Database-Neon_Postgres-orange?logo=postgresql)
 ![AI](https://img.shields.io/badge/Model-Llama_3.3-purple)
@@ -12,9 +12,9 @@
 ---
 
 ## 🔗 Live Demo (Evaluation Links)
-- **Frontend (Vercel):** [https://nexus-capstone.vercel.app](https://nexus-capstone.vercel.app)
-- **Backend API (Render):** [https://nexus-backend.onrender.com](https://nexus-backend.onrender.com)
-- **AI Engine Docs (Render):** [https://nexus-ai-engine.onrender.com/docs](https://nexus-ai-engine.onrender.com/docs)](https://nexus-ai-engine-hwdg.onrender.com/docs)
+- **Frontend (Vercel):** [https://nexus-ai-swarm.vercel.app](https://nexus-ai-swarm.vercel.app)
+- **Backend API (Railway):** [https://nexus-backend-production-50d4.up.railway.app](https://nexus-backend-production-50d4.up.railway.app)
+- **AI Engine Docs (Railway):** [https://nexus-project-production-e758.up.railway.app/docs](https://nexus-project-production-e758.up.railway.app/docs)
 
 ---
 
