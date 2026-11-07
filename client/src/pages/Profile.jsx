@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { User, Mail, Award, Clock, Layout } from 'lucide-react';
+import { User, Mail, Award, Clock, Layout, Linkedin, Twitter } from 'lucide-react';
 import { API_URL } from '../config';
 
 const Profile = () => {
@@ -14,14 +14,41 @@ const Profile = () => {
         setUser(res.data);
       });
       
-    // Fetch all history without limits/search for stats
+      // Fetch all history without limits/search for stats
     axios.get(`${API_URL}/api/projects?limit=100`, { withCredentials: true })
       .then(res => setProjects(res.data.projects));
+
+    // Handle LinkedIn redirect params
+    const params = new URLSearchParams(window.location.search);
+    const linkedinSuccess = params.get('linkedin');
+    const linkedinError = params.get('error');
+
+    if (linkedinSuccess) {
+      console.log("LinkedIn successfully connected!");
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (linkedinError) {
+      console.error("LinkedIn Connection Error:", linkedinError);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    const xSuccess = params.get('x');
+    const xError = params.get('error');
+
+    if (xSuccess) {
+      console.log("X successfully connected!");
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (xError && xError.startsWith('x_')) {
+      console.error("X Connection Error:", xError);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
   }, []);
 
   if (!user) return <div className="text-center p-10">Loading Profile...</div>;
 
   const completedCount = projects.filter(p => p.status === 'Completed').length;
+  
+  const hasLinkedIn = user.socialAccounts?.some(acc => acc.provider === 'linkedin');
+  const hasX = user.socialAccounts?.some(acc => acc.provider === 'x');
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -49,6 +76,33 @@ const Profile = () => {
               <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide">
                  Verified
               </span>
+            </div>
+            <div className="mt-6 border-t border-slate-100 pt-5 flex flex-wrap gap-4">
+              {hasLinkedIn ? (
+                <div className="inline-flex items-center gap-2 bg-emerald-50 text-emerald-700 border border-emerald-200 px-5 py-2.5 rounded-lg text-sm font-medium">
+                  <Linkedin className="w-4 h-4" /> LinkedIn Connected
+                </div>
+              ) : (
+                <a 
+                  href={`${API_URL}/auth/linkedin`}
+                  className="inline-flex items-center gap-2 bg-[#0A66C2] text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-[#004182] shadow-sm transition-all hover:shadow-md"
+                >
+                  <Linkedin className="w-4 h-4" /> Connect LinkedIn
+                </a>
+              )}
+              
+              {hasX ? (
+                <div className="inline-flex items-center gap-2 bg-emerald-50 text-emerald-700 border border-emerald-200 px-5 py-2.5 rounded-lg text-sm font-medium">
+                  <Twitter className="w-4 h-4" /> X Connected
+                </div>
+              ) : (
+                <a 
+                  href={`${API_URL}/auth/x`}
+                  className="inline-flex items-center gap-2 bg-black text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-zinc-800 shadow-sm transition-all hover:shadow-md"
+                >
+                  <Twitter className="w-4 h-4" /> Connect X
+                </a>
+              )}
             </div>
           </div>
         </div>

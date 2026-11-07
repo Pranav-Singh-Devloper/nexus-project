@@ -6,6 +6,9 @@ import { API_URL } from './config';
 import Profile from './pages/Profile';
 import ProjectDetails from './pages/ProjectDetails';
 import Auth from './pages/Auth';
+import TextFormatterPage from './pages/compose/TextFormatterPage';
+import Policy from './pages/Policy';
+import Service from './pages/Service';
 
 // Login Component (Internal)
 const Login = () => (
@@ -31,6 +34,9 @@ function App() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/projects/:id" element={<ProjectDetails />} />
+        <Route path="/compose" element={<TextFormatterPage />} />
+        <Route path="/policy" element={<Policy />} />
+        <Route path="/service" element={<Service />} />
       </Routes>
     </BrowserRouter>
   );

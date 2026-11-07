@@ -1,20 +1,20 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
-import { 
-  Plus, Layout, LogOut, Search, ChevronLeft, ChevronRight, 
-  Loader, CheckCircle, XCircle, Clock, Trash2, Edit2, User, AlertTriangle
+import {
+  Plus, Layout, LogOut, Search, ChevronLeft, ChevronRight,
+  Loader, CheckCircle, XCircle, Clock, Trash2, Edit2, User, AlertTriangle, PenLine, Sparkles
 } from 'lucide-react';
 import { API_URL } from '../config';
 
 const Dashboard = () => {
   const [user, setUser] = useState(null);
   const [projects, setProjects] = useState([]);
-  
+
   // UI States
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [loading, setLoading] = useState(false);
-  
+
   // Project Details & Notes State
   const [selectedProject, setSelectedProject] = useState(null);
   const [projectNotes, setProjectNotes] = useState([]);
@@ -22,11 +22,16 @@ const Dashboard = () => {
   const [editingNoteId, setEditingNoteId] = useState(null);
   const [editNoteText, setEditNoteText] = useState("");
 
+  // Generate Post States
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState(null);
+
   // Resume Feature States (Search, Sort, Filter, Pagination)
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const [sort, setSort] = useState("desc"); 
+  const [sort, setSort] = useState("desc");
   const [filterStatus, setFilterStatus] = useState("All");
 
   // 1. Initial User Load
@@ -35,18 +40,27 @@ const Dashboard = () => {
       .then(res => {
         if (!res.data) window.location.href = '/';
         setUser(res.data);
-      });
+      })
+      .catch(() => { window.location.href = '/'; });
   }, []);
 
+  // Wait until the user stops typing before searching (each search calls the AI engine)
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(1);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [search]);
+
   // 2. Fetch Projects List
-  const fetchProjects = (isBackground = false) => {
+  const fetchProjects = useCallback((isBackground = false) => {
     if (!isBackground) setLoading(true);
-    
-    // Construct Query String
-    let url = `${API_URL}/api/projects?page=${page}&limit=5&search=${search}&sort=${sort}`;
-    if (filterStatus !== 'All') url += `&status=${filterStatus}`; 
-    
-    axios.get(url, { withCredentials: true })
+
+    const params = new URLSearchParams({ page, limit: 5, search: debouncedSearch, sort });
+    if (filterStatus !== 'All') params.set('status', filterStatus);
+
+    axios.get(`${API_URL}/api/projects?${params}`, { withCredentials: true })
       .then(res => {
         setProjects(res.data.projects);
         setTotalPages(res.data.pagination.pages);
@@ -56,12 +70,12 @@ const Dashboard = () => {
         console.error(err);
         if (!isBackground) setLoading(false);
       });
-  };
+  }, [page, debouncedSearch, sort, filterStatus]);
 
   // 3. React to changes (Search/Filter/Sort/Page)
   useEffect(() => {
     fetchProjects();
-  }, [page, search, sort, filterStatus]);
+  }, [fetchProjects]);
 
   // 4. Smart Polling (Auto-refresh if AI is processing)
   useEffect(() => {
@@ -70,7 +84,7 @@ const Dashboard = () => {
       const interval = setInterval(() => { fetchProjects(true); }, 3000);
       return () => clearInterval(interval);
     }
-  }, [projects]);
+  }, [projects, fetchProjects]);
 
   // 5. Fetch Single Project Details (Includes Notes)
   const openProjectModal = async (project) => {
@@ -78,9 +92,10 @@ const Dashboard = () => {
     // Fetch fresh details including notes (READ Op #2)
     try {
       const res = await axios.get(`${API_URL}/api/projects/${project.id}`, { withCredentials: true });
+      setSelectedProject(res.data); // fresh report + status
       setProjectNotes(res.data.notes || []);
     } catch (err) {
-      console.error("Failed to fetch notes");
+      console.error("Failed to fetch project details", err);
     }
   };
 
@@ -94,19 +109,18 @@ const Dashboard = () => {
       await axios.post(`${API_URL}/api/projects`, { title: newTitle }, { withCredentials: true });
       setNewTitle("");
       setIsModalOpen(false);
-      setPage(1);
-      fetchProjects();
-    } catch (err) { alert("Failed to create mission"); setLoading(false); }
+      if (page === 1) fetchProjects(); else setPage(1); // page change triggers a fetch
+    } catch { alert("Failed to create mission"); setLoading(false); }
   };
 
   // DELETE Project
   const handleDeleteProject = async (e, id) => {
-    e.stopPropagation(); 
+    e.stopPropagation();
     if (!window.confirm("Delete this mission?")) return;
     try {
       await axios.delete(`${API_URL}/api/projects/${id}`, { withCredentials: true });
       fetchProjects();
-    } catch (err) { alert("Failed to delete"); }
+    } catch { alert("Failed to delete"); }
   };
 
   // --- NOTES HANDLERS (2nd Entity CRUD) ---
@@ -119,10 +133,10 @@ const Dashboard = () => {
         content: newNote,
         projectId: selectedProject.id
       }, { withCredentials: true });
-      
+
       setProjectNotes([...projectNotes, res.data]); // Update UI instantly
       setNewNote("");
-    } catch (err) { alert("Failed to add note"); }
+    } catch { alert("Failed to add note"); }
   };
 
   // DELETE Note
@@ -131,7 +145,7 @@ const Dashboard = () => {
     try {
       await axios.delete(`${API_URL}/api/notes/${noteId}`, { withCredentials: true });
       setProjectNotes(projectNotes.filter(n => n.id !== noteId));
-    } catch (err) { alert("Failed to delete note"); }
+    } catch { alert("Failed to delete note"); }
   };
 
   // START EDITING Note
@@ -146,21 +160,54 @@ const Dashboard = () => {
       const res = await axios.put(`${API_URL}/api/notes/${noteId}`, {
         content: editNoteText
       }, { withCredentials: true });
-      
+
       // Update UI
       setProjectNotes(projectNotes.map(n => n.id === noteId ? res.data : n));
       setEditingNoteId(null);
-    } catch (err) { alert("Failed to update note"); }
+    } catch { alert("Failed to update note"); }
+  };
+
+  // GENERATE LINKEDIN POST from research report
+  const handleGeneratePost = async () => {
+    if (isGenerating || !selectedProject?.report) return;
+
+    setIsGenerating(true);
+    setGenerateError(null);
+
+    try {
+      const res = await axios.post(
+        `${API_URL}/api/generate-linkedin-post`,
+        { content: selectedProject.report },
+        { withCredentials: true }
+      );
+
+      localStorage.setItem('nexus_linkedin_data', JSON.stringify({
+        version: 1,
+        post_html: res.data.post_html,
+        image_prompt: res.data.image_prompt,
+        image_style: res.data.image_style,
+        image_alt: res.data.image_alt,
+        hashtags: res.data.hashtags,
+        image_url: null,
+        image_status: 'pending'
+      }));
+      window.location.href = '/compose';
+    } catch (err) {
+      const message = err.response?.data?.error || 'Failed to generate post. Try again.';
+      setGenerateError(message);
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   // 6. Helper: Render Status Badge
-const renderStatus = (status) => {
+  const renderStatus = (status) => {
     if (status === 'Completed') return (
       <span className="text-emerald-600 flex items-center gap-1.5 text-xs font-medium bg-emerald-50 px-2 py-1 rounded-full border border-emerald-100">
         <CheckCircle className="w-3.5 h-3.5" /> Completed
       </span>
     );
-    
+
     // --- NEW CASE: DEMO MODE ---
     if (status === 'Demo Mode') return (
       <span className="text-amber-600 flex items-center gap-1.5 text-xs font-medium bg-amber-50 px-2 py-1 rounded-full border border-amber-100">
@@ -174,7 +221,7 @@ const renderStatus = (status) => {
         <XCircle className="w-3.5 h-3.5" /> Failed
       </span>
     );
-    
+
     return (
       <span className="text-blue-600 flex items-center gap-1.5 text-xs font-medium bg-blue-50 px-2 py-1 rounded-full border border-blue-100 animate-pulse">
         <Clock className="w-3.5 h-3.5" /> {status}
@@ -192,6 +239,10 @@ const renderStatus = (status) => {
           <Layout className="w-6 h-6" /> Nexus
         </h1>
         <div className="flex items-center gap-4">
+          {/* Compose Link */}
+          <a href="/compose" className="flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-black px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
+            <PenLine className="w-4 h-4" /> Compose
+          </a>
           {/* Profile Link */}
           <a href="/profile" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
             <img src={user.avatar} alt="User" className="w-8 h-8 rounded-full border" />
@@ -207,19 +258,19 @@ const renderStatus = (status) => {
         {/* Header & Search */}
         <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
           <h2 className="text-2xl font-bold text-slate-800">Mission Control</h2>
-          
+
           <div className="flex gap-4 w-full md:w-auto">
             <div className="relative w-full">
               <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-              <input 
-                type="text" 
-                placeholder="Search missions..." 
+              <input
+                type="text"
+                placeholder="Search missions..."
                 className="pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-black w-full"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
-            <button 
+            <button
               onClick={() => setIsModalOpen(true)}
               className="flex items-center gap-2 bg-black text-white px-4 py-2 rounded-lg hover:bg-slate-800 transition whitespace-nowrap"
             >
@@ -230,16 +281,16 @@ const renderStatus = (status) => {
 
         {/* Sort & Filter */}
         <div className="flex gap-4 mb-6">
-            <select className="p-2 border rounded-lg bg-white text-sm" value={sort} onChange={(e) => setSort(e.target.value)}>
-                <option value="desc">Newest First</option>
-                <option value="asc">Oldest First</option>
-            </select>
-            <select className="p-2 border rounded-lg bg-white text-sm" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
-                <option value="All">All Status</option>
-                <option value="Completed">Completed</option>
-                <option value="Initializing...">Processing</option>
-                <option value="Failed">Failed</option>
-            </select>
+          <select className="p-2 border rounded-lg bg-white text-sm" value={sort} onChange={(e) => setSort(e.target.value)}>
+            <option value="desc">Newest First</option>
+            <option value="asc">Oldest First</option>
+          </select>
+          <select className="p-2 border rounded-lg bg-white text-sm" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+            <option value="All">All Status</option>
+            <option value="Completed">Completed</option>
+            <option value="Initializing...">Processing</option>
+            <option value="Failed">Failed</option>
+          </select>
         </div>
 
         {/* Project List */}
@@ -264,7 +315,7 @@ const renderStatus = (status) => {
                 </div>
                 <div className="flex items-center gap-3 self-end sm:self-center">
                   {p.status === 'Completed' ? (
-                    <button 
+                    <button
                       onClick={() => openProjectModal(p)}
                       className="text-sm font-medium text-slate-700 bg-white border border-slate-300 px-4 py-2 rounded-lg hover:bg-slate-50 hover:text-black transition-colors shadow-sm"
                     >
@@ -312,16 +363,16 @@ const renderStatus = (status) => {
             <div className="p-6 border-b flex justify-between items-center bg-white sticky top-0">
               <h3 className="text-xl font-bold truncate pr-4">{selectedProject.title}</h3>
               <div className="flex items-center gap-2">
-                 <a href={`/projects/${selectedProject.id}`} className="text-xs text-blue-600 hover:underline mr-4">Full Page View</a>
-                 <button onClick={() => setSelectedProject(null)} className="text-slate-500 hover:text-black">
-                    <XCircle className="w-6 h-6" />
-                 </button>
+                <a href={`/projects/${selectedProject.id}`} className="text-xs text-blue-600 hover:underline mr-4">Full Page View</a>
+                <button onClick={() => setSelectedProject(null)} className="text-slate-500 hover:text-black">
+                  <XCircle className="w-6 h-6" />
+                </button>
               </div>
             </div>
 
             {/* Modal Body - Grid Layout */}
             <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
-              
+
               {/* Left Column: AI Report */}
               <div className="flex-1 p-6 overflow-y-auto border-r border-slate-100 bg-slate-50">
                 <h4 className="font-semibold text-slate-700 mb-4 flex items-center gap-2">
@@ -330,6 +381,35 @@ const renderStatus = (status) => {
                 <div className="prose prose-sm max-w-none text-slate-800 leading-relaxed whitespace-pre-wrap font-sans">
                   {selectedProject.report || "No content generated."}
                 </div>
+
+                {/* Generate Post Button */}
+                {selectedProject.report && (
+                  <div className="mt-6 pt-4 border-t border-slate-200">
+                    <button
+                      onClick={handleGeneratePost}
+                      disabled={isGenerating}
+                      className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:from-blue-700 hover:to-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed transition-all shadow-sm"
+                    >
+                      {isGenerating ? (
+                        <>
+                          <Loader className="w-4 h-4 animate-spin" />
+                          Generating draft...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-4 h-4" />
+                          Generate LinkedIn Post
+                        </>
+                      )}
+                    </button>
+
+                    {generateError && (
+                      <p className="mt-3 text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg border border-red-100">
+                        {generateError}
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Right Column: Notes (CRUD Feature) */}
@@ -337,7 +417,7 @@ const renderStatus = (status) => {
                 <h4 className="font-semibold text-slate-700 mb-4 flex items-center gap-2">
                   <Edit2 className="w-4 h-4" /> Analyst Notes
                 </h4>
-                
+
                 {/* Note List */}
                 <div className="flex-1 overflow-y-auto mb-4 space-y-3">
                   {projectNotes.length === 0 ? (
@@ -345,12 +425,12 @@ const renderStatus = (status) => {
                   ) : (
                     projectNotes.map(note => (
                       <div key={note.id} className="bg-slate-50 p-3 rounded-lg border border-slate-100 text-sm group relative hover:border-blue-200 transition-colors">
-                        
+
                         {/* Edit Mode Check */}
                         {editingNoteId === note.id ? (
                           <div className="flex flex-col gap-2">
-                            <textarea 
-                              className="w-full border p-2 rounded bg-white" 
+                            <textarea
+                              className="w-full border p-2 rounded bg-white"
                               rows="2"
                               value={editNoteText}
                               onChange={(e) => setEditNoteText(e.target.value)}
@@ -364,7 +444,7 @@ const renderStatus = (status) => {
                           <>
                             <p className="text-slate-700 pr-6 break-words">{note.content}</p>
                             <span className="text-[10px] text-slate-400 block mt-1">{new Date(note.createdAt).toLocaleDateString()}</span>
-                            
+
                             {/* Actions */}
                             <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button onClick={() => startEditing(note)} className="text-slate-400 hover:text-blue-600"><Edit2 className="w-3 h-3" /></button>
@@ -379,14 +459,14 @@ const renderStatus = (status) => {
 
                 {/* Add Note Input */}
                 <div className="mt-auto pt-4 border-t">
-                  <textarea 
+                  <textarea
                     className="w-full border p-2 rounded-lg text-sm focus:ring-2 focus:ring-black outline-none resize-none bg-slate-50 focus:bg-white transition-colors"
                     rows="2"
                     placeholder="Add a finding..."
                     value={newNote}
                     onChange={(e) => setNewNote(e.target.value)}
                   />
-                  <button 
+                  <button
                     onClick={handleAddNote}
                     disabled={!newNote.trim()}
                     className="w-full mt-2 bg-black text-white py-2 rounded-lg text-sm font-medium hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition"
