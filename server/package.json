@@ -2,9 +2,12 @@
   "name": "server",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "src/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "build": "prisma generate",
+    "postinstall": "prisma generate"
   },
   "keywords": [],
   "author": "",
@@ -22,10 +25,13 @@
     "jsonwebtoken": "^9.0.3",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
-    "passport-openidconnect": "^0.1.2"
+    "passport-openidconnect": "^0.1.2",
+    "prisma": "^6.19.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.11",
-    "prisma": "^6.19.0"
+    "nodemon": "^3.1.11"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
