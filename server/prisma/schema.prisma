@@ -17,6 +17,43 @@ model User {
   avatar    String?
   createdAt DateTime @default(now())
   projects  Project[]
+  socialAccounts SocialAccount[]
+  scheduledPosts ScheduledPost[]
+}
+
+
+model SocialAccount {
+  id                String   @id @default(uuid())
+  provider          String   // "linkedin", "x"
+  providerAccountId String
+  accessToken       String
+  refreshToken      String?
+  expiresAt         DateTime // Required for refresh token logic
+  
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt         DateTime @default(now())
+
+  @@unique([provider, providerAccountId])
+  @@unique([userId, provider])
+}
+
+model ScheduledPost {
+  id              String   @id @default(uuid())
+  content         String   @db.Text
+  scheduledAt     DateTime // Always stored in UTC
+  status          String   @default("pending") // pending | posting | published | failed
+  retryCount      Int      @default(0)
+  provider        String   @default("linkedin") // "linkedin", "x"
+  providerPostId  String?
+  imageUrl        String?
+  error           String?
+
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime @default(now())
 }
 
 model Project {
@@ -25,7 +62,11 @@ model Project {
   status    String   @default("draft")
   report    String?  @db.Text
   createdAt DateTime @default(now())
-  
+
+  // pgvector column used by hybrid search (written/read with raw SQL).
+  // Must stay in the schema, otherwise `prisma db push` / `migrate` drops it.
+  embedding Unsupported("vector(384)")?
+
   userId    String
   user      User     @relation(fields: [userId], references: [id])
   
