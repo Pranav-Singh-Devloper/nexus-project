@@ -50,3 +50,6 @@ passport.use(
     }
   )
 );
+
+// LinkedIn OAuth is handled manually (raw axios) in index.js
+// No passport strategy needed — gives full control over token exchange

@@ -29,7 +29,7 @@ router.get('/', requireAuth, async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 5;
     const search = req.query.search || "";
-    const sort = req.query.sort || "desc"; // 'asc' or 'desc'
+    const sort = req.query.sort === "asc" ? "asc" : "desc";
     const status = req.query.status || "All"; // 'All', 'Completed', etc.
 
     const offset = (page - 1) * limit;
@@ -67,7 +67,7 @@ router.get('/', requireAuth, async (req, res) => {
       // 1. Convert Search Text -> Vector
       try {
         if (aiServiceUrl) {
-          const vectorRes = await axios.post(`${aiServiceUrl}/create-vector`, { text: search });
+          const vectorRes = await axios.post(`${aiServiceUrl}/create-vector`, { text: search }, { timeout: 15000 });
           vectorQuery = vectorRes.data.vector;
         }
       } catch (e) {
@@ -78,37 +78,54 @@ router.get('/', requireAuth, async (req, res) => {
       // We use a neat SQL trick: (param = 'All' OR status = param) to handle filtering logic inside SQL
       if (vectorQuery) {
         const vectorString = `[${vectorQuery.join(',')}]`;
-        
-        projects = await prisma.$queryRaw`
-          SELECT id, title, status, report, "createdAt"
-          FROM "Project"
-          WHERE "userId" = ${req.user.id}
-          AND (${status} = 'All' OR status = ${status})
-          AND (
-            title ILIKE ${`%${search}%`} 
-            OR 
-            embedding <=> ${vectorString}::vector < 0.5
-          )
-          ORDER BY (embedding <=> ${vectorString}::vector) ASC
-          LIMIT ${limit} OFFSET ${offset}
-        `;
-        
-        // Note: Exact count for hybrid is complex, we use a placeholder or separate query
-        // For a resume demo, setting it to '10' or length ensures pagination doesn't break
-        totalCount = projects.length < limit ? projects.length : 100; 
 
-      } else {
-        // Fallback: Keyword Only (if Python is down)
+        try {
+          projects = await prisma.$queryRaw`
+            SELECT id, title, status, report, "createdAt"
+            FROM "Project"
+            WHERE "userId" = ${req.user.id}
+            AND (${status} = 'All' OR status = ${status})
+            AND (
+              title ILIKE ${`%${search}%`}
+              OR
+              embedding <=> ${vectorString}::vector < 0.5
+            )
+            ORDER BY (embedding <=> ${vectorString}::vector) ASC NULLS LAST
+            LIMIT ${limit} OFFSET ${offset}
+          `;
+
+          const [{ count }] = await prisma.$queryRaw`
+            SELECT COUNT(*)::int AS count
+            FROM "Project"
+            WHERE "userId" = ${req.user.id}
+            AND (${status} = 'All' OR status = ${status})
+            AND (
+              title ILIKE ${`%${search}%`}
+              OR
+              embedding <=> ${vectorString}::vector < 0.5
+            )
+          `;
+          totalCount = count;
+        } catch (e) {
+          console.error("Vector search failed, falling back to keyword only:", e.message);
+          vectorQuery = null;
+        }
+      }
+
+      if (!vectorQuery) {
+        // Keyword only (AI engine down or vector query failed)
+        const keywordWhere = {
+          userId: req.user.id,
+          title: { contains: search, mode: 'insensitive' },
+          ...(status !== 'All' && { status: status })
+        };
         projects = await prisma.project.findMany({
-          where: {
-            userId: req.user.id,
-            title: { contains: search, mode: 'insensitive' },
-            ...(status !== 'All' && { status: status })
-          },
+          where: keywordWhere,
+          orderBy: { createdAt: sort },
           take: limit,
           skip: offset
         });
-        totalCount = projects.length; // Approximate
+        totalCount = await prisma.project.count({ where: keywordWhere });
       }
     }
 
@@ -143,7 +160,7 @@ router.post('/', requireAuth, async (req, res) => {
   const { title } = req.body;
   const aiServiceUrl = process.env.AI_SERVICE_URL;
 
-  if (!title) return res.status(400).send({ error: 'Title required' });
+  if (!title || !title.trim()) return res.status(400).send({ error: 'Title required' });
 
   try {
     // A. Create Draft (Initial "Initializing" state)
@@ -160,64 +177,75 @@ router.post('/', requireAuth, async (req, res) => {
 
     // C. Background Task with RETRY LOGIC
     (async () => {
-      if (!aiServiceUrl) return;
-      
+      if (!aiServiceUrl) {
+        await prisma.project.update({
+          where: { id: project.id },
+          data: { status: 'Failed', report: 'AI service is not configured on the server (AI_SERVICE_URL is missing).' }
+        });
+        return;
+      }
+
       const MAX_RETRIES = 3;
-      let attempt = 0;
-      let success = false;
+      let reportText = null;
+      let aiStatus = null;
+      let lastError = null;
 
-      while (attempt < MAX_RETRIES && !success) {
+      // 1. Generate Report (retried)
+      for (let attempt = 1; attempt <= MAX_RETRIES && reportText === null; attempt++) {
         try {
-          attempt++;
           console.log(`[AI-TASK] Attempt ${attempt} for ${project.id}`);
-
-          // 1. Generate Report
-          const aiResponse = await axios.post(`${aiServiceUrl}/start-research`, { prompt: title });
-          
-          // --- EXTRACT DATA (Moved Inside Loop) ---
-          const { report: reportText, status: aiStatus } = aiResponse.data;
-
-          // --- DETERMINE FINAL DB STATUS (Moved Inside Loop) ---
-          // If AI says "demo_mode", we save 'Demo Mode'. Otherwise 'Completed'.
-          const finalStatus = aiStatus === 'demo_mode' ? 'Demo Mode' : 'Completed';
-
-          // 2. Generate Embedding
-          // (We use a snippet of the report to generate the vector)
-          const embedText = `${title}: ${reportText.substring(0, 500)}`;
-          const vectorRes = await axios.post(`${aiServiceUrl}/create-vector`, { text: embedText });
-          const vectorString = `[${vectorRes.data.vector.join(',')}]`;
-
-          // 3. Save to DB using Raw SQL for Vector support
-          await prisma.$executeRaw`
-            UPDATE "Project"
-            SET status = ${finalStatus},
-                report = ${reportText},
-                embedding = ${vectorString}::vector
-            WHERE id = ${project.id}
-          `;
-          
-          console.log(`[AI-TASK] Finished ${project.id} with status: ${finalStatus}`);
-          success = true; // Exit loop
-
+          const aiResponse = await axios.post(`${aiServiceUrl}/start-research`, { prompt: title }, { timeout: 180000 });
+          reportText = aiResponse.data.report || '';
+          aiStatus = aiResponse.data.status;
         } catch (error) {
-          console.error(`[AI-TASK] Failed Attempt ${attempt}:`, error.message);
-          
-          // If it's a 429 (Rate Limit) or 500, wait and retry
+          lastError = error;
+          console.error(`[AI-TASK] Failed Attempt ${attempt}:`, error.response?.data || error.message);
           if (attempt < MAX_RETRIES) {
-             const delay = attempt * 2000; // Exponential-ish backoff: 2s, 4s, 6s
-             console.log(`[AI-TASK] Retrying in ${delay/1000}s...`);
-             await new Promise(res => setTimeout(res, delay));
-          } else {
-            // Final Failure after all retries
-            await prisma.project.update({
-              where: { id: project.id },
-              data: { 
-                status: 'Failed',
-                report: `System is currently experiencing high traffic (Rate Limit). Please try again later.\n\nError details: ${error.message}`
-              }
-            });
+            const delay = attempt * 2000; // 2s, 4s
+            console.log(`[AI-TASK] Retrying in ${delay / 1000}s...`);
+            await new Promise(r => setTimeout(r, delay));
           }
         }
+      }
+
+      try {
+        if (reportText === null) {
+          const status = lastError?.response?.status;
+          const detail = lastError?.response?.data?.detail || lastError?.message || 'Unknown error';
+          const reason = status === 429 || status === 503
+            ? 'The AI provider is rate limiting requests right now. Please try again in a few minutes.'
+            : 'The AI engine could not complete this research.';
+          await prisma.project.update({
+            where: { id: project.id },
+            data: { status: 'Failed', report: `${reason}\n\nError details: ${detail}` }
+          });
+          return;
+        }
+
+        // If AI says "demo_mode", we save 'Demo Mode'. Otherwise 'Completed'.
+        const finalStatus = aiStatus === 'demo_mode' ? 'Demo Mode' : 'Completed';
+
+        // 2. Save the report first so it is never lost
+        await prisma.project.update({
+          where: { id: project.id },
+          data: { status: finalStatus, report: reportText }
+        });
+
+        // 3. Generate + store embedding for semantic search (optional; search falls back to keywords)
+        try {
+          const embedText = `${title}: ${reportText.substring(0, 500)}`;
+          const vectorRes = await axios.post(`${aiServiceUrl}/create-vector`, { text: embedText }, { timeout: 30000 });
+          const vectorString = `[${vectorRes.data.vector.join(',')}]`;
+          await prisma.$executeRaw`
+            UPDATE "Project" SET embedding = ${vectorString}::vector WHERE id = ${project.id}
+          `;
+        } catch (e) {
+          console.error(`[AI-TASK] Embedding failed for ${project.id} (report kept):`, e.message);
+        }
+
+        console.log(`[AI-TASK] Finished ${project.id} with status: ${finalStatus}`);
+      } catch (e) {
+        console.error(`[AI-TASK] Could not save result for ${project.id}:`, e.message);
       }
     })();
 
@@ -230,6 +258,7 @@ router.post('/', requireAuth, async (req, res) => {
 // --- 4. UPDATE PROJECT (Rename) ---
 router.put('/:id', requireAuth, async (req, res) => {
   const { title } = req.body;
+  if (!title || !title.trim()) return res.status(400).send({ error: 'Title required' });
   try {
     const updated = await prisma.project.update({
       where: { id: req.params.id, userId: req.user.id },
@@ -237,6 +266,7 @@ router.put('/:id', requireAuth, async (req, res) => {
     });
     res.send(updated);
   } catch (err) {
+    if (err.code === 'P2025') return res.status(404).send({ error: 'Not found' });
     res.status(500).send({ error: 'Update failed' });
   }
 });
@@ -249,6 +279,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
     });
     res.send({ message: 'Deleted' });
   } catch (err) {
+    if (err.code === 'P2025') return res.status(404).send({ error: 'Not found' });
     res.status(500).send({ error: 'Delete failed' });
   }
 });

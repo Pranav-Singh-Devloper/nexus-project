@@ -5,6 +5,9 @@ const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
+// Strip the password hash before sending a user to the client
+const publicUser = ({ password, ...rest }) => rest;
+
 // Helper: Generate JWT
 const generateToken = (user) => {
   return jwt.sign({ id: user.id, email: user.email }, process.env.COOKIE_KEY, {
@@ -50,7 +53,7 @@ router.post('/signup', async (req, res) => {
         maxAge: 7 * 24 * 60 * 60 * 1000
     });
 
-    res.status(201).send(user);
+    res.status(201).send(publicUser(user));
 
   } catch (err) {
     console.error(err);
@@ -61,6 +64,10 @@ router.post('/signup', async (req, res) => {
 // 2. LOGIN
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).send({ error: "Email and password are required" });
+  }
 
   try {
     const user = await prisma.user.findUnique({ where: { email } });
@@ -87,9 +94,10 @@ router.post('/login', async (req, res) => {
         maxAge: 7 * 24 * 60 * 60 * 1000
     });
 
-    res.send(user);
+    res.send(publicUser(user));
 
   } catch (err) {
+    console.error(err);
     res.status(500).send({ error: "Login failed" });
   }
 });
