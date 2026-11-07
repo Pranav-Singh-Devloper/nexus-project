@@ -1,0 +1,15 @@
+
+# OS / editor junk
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Stale Prisma client output (the app uses @prisma/client from node_modules)
+server/src/generated/
+
+# Build output
+client/dist/
