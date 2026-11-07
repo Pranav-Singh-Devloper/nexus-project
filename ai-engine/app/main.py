@@ -1,8 +1,10 @@
 import os
+import json
 import operator
 import logging
 import asyncio
-from typing import TypedDict, Annotated, List, Literal
+import httpx
+from typing import TypedDict, Annotated, List
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -12,8 +14,8 @@ from pydantic import BaseModel
 from langchain_openai import ChatOpenAI
 from langchain_tavily import TavilySearch
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, BaseMessage
-from langgraph.graph import StateGraph, END, MessagesState
-from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
+from langgraph.graph import StateGraph, END
+from fastembed import TextEmbedding
 
 # --- Setup ---
 load_dotenv()
@@ -31,9 +33,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Groq retires models regularly; override with GROQ_MODEL instead of editing code.
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+
 # --- Global Tools & Embeddings ---
 tavily_tool = TavilySearch(max_results=3, search_depth="advanced")
-embeddings_model = FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+embeddings_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")  # 384-dim, matches vector(384)
 
 # --- State Definition ---
 class AgentState(TypedDict):
@@ -45,7 +50,7 @@ class AgentState(TypedDict):
 def build_research_agent(api_key: str):
     # Base LLM for fallbacks (no tools)
     llm_base = ChatOpenAI(
-        model="llama-3.3-70b-versatile", # Highly recommended for Groq
+        model=GROQ_MODEL,
         openai_api_key=api_key,
         openai_api_base="https://api.groq.com/openai/v1",
         temperature=0,
@@ -121,12 +126,53 @@ class VectorRequest(BaseModel):
     text: str 
     metadata: dict = {}
 
+class GeneratePostRequest(BaseModel):
+    content: str
+
+class GenerateImageRequest(BaseModel):
+    prompt: str
+    style: str = "square"
+
+# --- LinkedIn Post Prompt ---
+LINKEDIN_POST_PROMPT = """You are a world-class LinkedIn creator and visual strategist.
+
+Given research content, generate two things:
+1. A high-performing LinkedIn post in valid HTML.
+2. A single detailed image prompt that visually matches the post.
+
+Return STRICT JSON only, using exactly this schema:
+{
+    "post_html": "...",
+    "image_prompt": "...",
+    "image_style": "...",
+    "image_alt": "...",
+    "hashtags": ["...", "...", "..."]
+}
+
+Post Rules:
+1. Use ONLY valid simple HTML tags: <strong>, <em>, <u>, <s>, <br>, <p>, <ul>, <ol>, <li>, <a>
+2. Do NOT use <div>, <span>, markdown, inline styles, or CSS classes.
+3. Concise, punchy, high-signal. Start with a strong hook, end with curiosity.
+4. Exactly 3 to 5 hashtags in the JSON array.
+5. Do not include hashtags inside post_html.
+
+Image Prompt Rules:
+1. Match the post's core thematic insight, not just generic visuals.
+2. Be specific, vivid, and production-ready for text-to-image.
+3. Describe subject, composition, mood, lighting, color palette, camera perspective, and realism.
+4. Avoid text overlays, logos, watermarks, or UI screenshots unless strictly required.
+5. For style, use one of: "square", "wide".
+
+Do not explain your reasoning. Output ONLY valid JSON."""
+
 # --- Endpoints ---
 
 @app.post("/start-research")
 async def start_research(request: ResearchRequest):
     api_keys = [os.getenv("GROQ_API_KEY"), os.getenv("GROQ_API_KEY_BACKUP")]
     available_keys = [k for k in api_keys if k]
+    if not available_keys:
+        raise HTTPException(status_code=503, detail="No GROQ_API_KEY configured.")
 
     system_prompt = """You are an expert market researcher. 
     Use the search tool for current facts. 
@@ -145,20 +191,154 @@ async def start_research(request: ResearchRequest):
                 "status": "success",
                 "report": final_state["messages"][-1].content
             }
+        except HTTPException:
+            raise
         except Exception as e:
             if "429" in str(e):
                 logger.error("Rate limit hit, rotating key...")
                 continue
+            logger.error(f"Research error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     raise HTTPException(status_code=503, detail="All API keys exhausted.")
 
+@app.post("/generate-post")
+async def generate_post(request: GeneratePostRequest):
+    if not request.content or not request.content.strip():
+        raise HTTPException(status_code=400, detail="Content is required.")
+
+    api_keys = [os.getenv("GROQ_API_KEY"), os.getenv("GROQ_API_KEY_BACKUP")]
+    available_keys = [k for k in api_keys if k]
+
+    if not available_keys:
+        raise HTTPException(status_code=503, detail="No API keys configured.")
+
+    for key in available_keys:
+        try:
+            llm = ChatOpenAI(
+                model=GROQ_MODEL,
+                openai_api_key=key,
+                openai_api_base="https://api.groq.com/openai/v1",
+                temperature=0.7,
+                max_tokens=1024,
+                model_kwargs={"response_format": {"type": "json_object"}}
+            )
+
+            messages = [
+                SystemMessage(content=LINKEDIN_POST_PROMPT),
+                HumanMessage(content=f"Transform the following research into a LinkedIn post + image package:\n\n{request.content[:4000]}")
+            ]
+
+            # Retry loop for JSON validation
+            max_retries = 1
+            for attempt in range(max_retries + 1):
+                try:
+                    response = await llm.ainvoke(messages)
+                    content = response.content.strip()
+                    
+                    # Remove markdown fences if it wrapped JSON
+                    if content.startswith("```"):
+                        content = content.split("\n", 1)[-1]
+                        if content.endswith("```"):
+                            content = content.rsplit("```", 1)[0]
+                    
+                    parsed = json.loads(content)
+                    required_keys = ["post_html", "image_prompt", "image_style", "image_alt", "hashtags"]
+                    
+                    if not all(k in parsed for k in required_keys):
+                        raise ValueError(f"Missing required keys. Found: {list(parsed.keys())}")
+                    
+                    # Normalize image prompt to ensure high quality
+                    base_prompt = parsed["image_prompt"].strip()
+                    # Strip vague words
+                    base_prompt = base_prompt.replace("cool", "").replace("interesting", "").replace("  ", " ").strip()
+                    # Enhance with global guidelines
+                    enhanced_prompt = f"{base_prompt}, high quality, clean composition, professional lighting, minimal text, modern style"
+                    
+                    return {
+                        "status": "success",
+                        "post_html": parsed["post_html"],
+                        "image_prompt": enhanced_prompt,
+                        "image_style": parsed["image_style"],
+                        "image_alt": parsed["image_alt"],
+                        "hashtags": parsed["hashtags"]
+                    }
+                    
+                except json.JSONDecodeError as e:
+                    logger.warning(f"JSON parsing failed on attempt {attempt}: {e}")
+                    if attempt == max_retries:
+                        raise HTTPException(status_code=500, detail="Failed to generate valid JSON structure.")
+                    # Provide feedback and retry
+                    messages.append(response)
+                    messages.append(HumanMessage(content="Your response was not valid JSON. Please return STRICT JSON only matching the exact schema requested without any extra markdown formatting."))
+                except Exception as e:
+                    logger.warning(f"Validation failed on attempt {attempt}: {e}")
+                    if attempt == max_retries:
+                        raise HTTPException(status_code=500, detail=str(e))
+                        
+        except HTTPException:
+            raise
+        except Exception as e:
+            if "429" in str(e):
+                logger.warning("Rate limit hit on generate-post, rotating key...")
+                continue
+            logger.error(f"Generate post error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again shortly.")
+
+@app.post("/generate-image")
+async def generate_image(request: GenerateImageRequest):
+    img_api_key = os.getenv("WAVESPEED_API_KEY")
+    if not img_api_key:
+        raise HTTPException(status_code=500, detail="Image generation API key not configured.")
+        
+    width = 1024
+    height = 768 if request.style.lower() == "wide" else 1024
+    
+    payload = {
+        "prompt": request.prompt,
+        "size": f"{width}*{height}",
+        "enable_sync_mode": True
+    }
+    
+    headers = {
+        "Authorization": f"Bearer {img_api_key}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.post(
+                "https://api.wavespeed.ai/api/v3/wavespeed-ai/z-image/turbo",
+                json=payload,
+                headers=headers,
+                timeout=45.0
+            )
+            res.raise_for_status()
+            data = res.json()
+            
+            # The synchronous API returns the outputs in data.outputs[0]
+            if "data" in data and "outputs" in data["data"] and data["data"]["outputs"]:
+                image_url = data["data"]["outputs"][0]
+                return {"status": "success", "image_url": image_url}
+            else:
+                logger.error(f"Wavespeed sync mode failed. Response: {data}")
+                raise HTTPException(status_code=500, detail=f"Wavespeed structure invalid or timed out: {data}")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Wavespeed HTTP Error: {e.response.text}")
+        raise HTTPException(status_code=e.response.status_code, detail=f"Image API returned error: {e.response.text}")
+    except Exception as e:
+        logger.error(f"Wavespeed API Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Image generation failed: {e}")
+
 @app.post("/create-vector")
-async def create_vector(request: VectorRequest):
+def create_vector(request: VectorRequest):
     try:
         # This converts the report text into a list of floats
-        vector = embeddings_model.embed_query(request.text)
+        vector = next(iter(embeddings_model.query_embed(request.text))).tolist()
         logger.info("✅ Vector generated successfully")
         return {"status": "success", "vector_length": len(vector), "vector": vector}
     except Exception as e:
+        logger.error(f"Vector error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
