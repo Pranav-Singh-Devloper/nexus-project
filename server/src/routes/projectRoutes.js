@@ -212,8 +212,9 @@ router.post('/', requireAuth, async (req, res) => {
         if (reportText === null) {
           const status = lastError?.response?.status;
           const detail = lastError?.response?.data?.detail || lastError?.message || 'Unknown error';
-          const reason = status === 429 || status === 503
-            ? 'The AI provider is rate limiting requests right now. Please try again in a few minutes.'
+          const isRateLimit = status === 429 || /exhausted|rate limit/i.test(String(detail));
+          const reason = isRateLimit
+            ?'The AI provider is rate limiting requests right now. Please try again in a few minutes.'
             : 'The AI engine could not complete this research.';
           await prisma.project.update({
             where: { id: project.id },
