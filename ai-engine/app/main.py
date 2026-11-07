@@ -3,6 +3,7 @@ import json
 import operator
 import logging
 import asyncio
+import threading
 import httpx
 from typing import TypedDict, Annotated, List
 
@@ -36,9 +37,28 @@ app.add_middleware(
 # Groq retires models regularly; override with GROQ_MODEL instead of editing code.
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
-# --- Global Tools & Embeddings ---
-tavily_tool = TavilySearch(max_results=3, search_depth="advanced")
-embeddings_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")  # 384-dim, matches vector(384)
+# --- Global Tools & Embeddings (created lazily) ---
+# Created on first use so the server always starts, even if an API key is
+# missing or the embedding model download is slow. /health shows what's missing.
+_tavily_tool = None
+_embeddings_model = None
+_lock = threading.Lock()
+
+def get_tavily_tool():
+    global _tavily_tool
+    if _tavily_tool is None:
+        with _lock:
+            if _tavily_tool is None:
+                _tavily_tool = TavilySearch(max_results=3, search_depth="advanced")
+    return _tavily_tool
+
+def get_embeddings_model():
+    global _embeddings_model
+    if _embeddings_model is None:
+        with _lock:
+            if _embeddings_model is None:
+                _embeddings_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")  # 384-dim, matches vector(384)
+    return _embeddings_model
 
 # --- State Definition ---
 class AgentState(TypedDict):
@@ -58,6 +78,7 @@ def build_research_agent(api_key: str):
     )
     
     # Tool-bound LLM
+    tavily_tool = get_tavily_tool()
     llm_with_tools = llm_base.bind_tools([tavily_tool])
 
     async def call_model(state: AgentState):
@@ -166,6 +187,17 @@ Image Prompt Rules:
 Do not explain your reasoning. Output ONLY valid JSON."""
 
 # --- Endpoints ---
+
+@app.get("/health")
+def health():
+    # Reports only whether each setting is present, never its value.
+    keys = ["GROQ_API_KEY", "GROQ_API_KEY_BACKUP", "TAVILY_API_KEY", "WAVESPEED_API_KEY"]
+    return {
+        "status": "ok",
+        "model": GROQ_MODEL,
+        "configured": {k: bool(os.getenv(k)) for k in keys},
+        "embeddings_loaded": _embeddings_model is not None,
+    }
 
 @app.post("/start-research")
 async def start_research(request: ResearchRequest):
@@ -336,7 +368,7 @@ async def generate_image(request: GenerateImageRequest):
 def create_vector(request: VectorRequest):
     try:
         # This converts the report text into a list of floats
-        vector = next(iter(embeddings_model.query_embed(request.text))).tolist()
+        vector = next(iter(get_embeddings_model().query_embed(request.text))).tolist()
         logger.info("✅ Vector generated successfully")
         return {"status": "success", "vector_length": len(vector), "vector": vector}
     except Exception as e:
