@@ -16,7 +16,7 @@ const components = {
   ),
   // Wide tables scroll sideways instead of stretching the layout.
   table: ({ node: _node, ...props }) => (
-    <div className="overflow-x-auto">
+    <div className="my-6 overflow-x-auto rounded-xl border border-line [&>table]:!my-0">
       <table {...props} />
     </div>
   ),
@@ -24,12 +24,12 @@ const components = {
 
 const MarkdownReport = ({ content, fallback = 'No report generated.', className = '' }) => {
   if (!content) {
-    return <p className="text-slate-400 italic">{fallback}</p>;
+    return <p className="italic text-muted">{fallback}</p>;
   }
 
   return (
     <div
-      className={`prose prose-slate max-w-none prose-headings:font-semibold prose-a:text-blue-600 prose-table:text-sm prose-th:bg-slate-100 prose-th:px-3 prose-th:py-2 prose-td:px-3 prose-td:py-2 ${className}`}
+      className={`prose prose-nexus max-w-none prose-headings:font-semibold prose-table:text-sm prose-th:px-3 prose-th:py-2 prose-td:px-3 prose-td:py-2 ${className}`}
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}

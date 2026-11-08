@@ -1,6 +1,34 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { X, Calendar, Clock, Loader2 } from 'lucide-react';
+import { useState } from 'react';
+import { motion } from 'framer-motion';
+import { Calendar, Clock, CalendarCheck } from 'lucide-react';
+import { Button, Modal } from '../../components/ui';
+
+const pad = (n) => String(n).padStart(2, '0');
+const toDateInput = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const toTimeInput = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
+// One-tap suggestions; LinkedIn engagement tends to peak on weekday mornings.
+function quickPicks() {
+  const now = new Date();
+  const inHour = new Date(now.getTime() + 60 * 60 * 1000);
+  inHour.setMinutes(Math.ceil(inHour.getMinutes() / 15) * 15, 0, 0);
+
+  const tomorrow9 = new Date(now);
+  tomorrow9.setDate(now.getDate() + 1);
+  tomorrow9.setHours(9, 0, 0, 0);
+
+  const monday9 = new Date(now);
+  monday9.setDate(now.getDate() + (((8 - now.getDay()) % 7) || 7));
+  monday9.setHours(9, 0, 0, 0);
+
+  const picks = [
+    { label: 'In 1 hour', date: inHour },
+    { label: 'Tomorrow, 9 AM', date: tomorrow9 },
+    { label: 'Monday, 9 AM', date: monday9 },
+  ];
+  // On Sundays "tomorrow" is Monday; keep only one of them
+  return picks.filter((p, i) => picks.findIndex(q => q.date.getTime() === p.date.getTime()) === i);
+}
 
 const ScheduleModal = ({ isOpen, onClose, onConfirm, isScheduling }) => {
   const [date, setDate] = useState('');
@@ -8,125 +36,79 @@ const ScheduleModal = ({ isOpen, onClose, onConfirm, isScheduling }) => {
 
   const handleConfirm = () => {
     if (!date || !time) return;
-
-    // Convert local date + time to a UTC ISO string
-    // The user picks local time; we must send UTC to the server
-    const localDateTime = new Date(`${date}T${time}:00`);
-    const utcDateString = localDateTime.toISOString();
-
-    onConfirm(utcDateString);
-
-    // Reset inputs on next open
+    // The user picks local time; the server expects UTC
+    onConfirm(new Date(`${date}T${time}:00`).toISOString());
     setDate('');
     setTime('');
   };
 
-  // Get today's date in YYYY-MM-DD format for date min
-  const today = new Date().toISOString().split('T')[0];
+  const today = toDateInput(new Date());
+  const picked = date && time ? new Date(`${date}T${time}:00`) : null;
+  const inPast = picked && picked <= new Date();
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={onClose}
-        >
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 10 }}
-            transition={{ type: 'spring', duration: 0.35 }}
-            className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-              <h3 className="text-lg font-bold text-slate-900">Schedule Post</h3>
-              <button
-                onClick={onClose}
-                disabled={isScheduling}
-                className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors disabled:opacity-50"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Body */}
-            <div className="px-6 py-5 space-y-4">
-              <div>
-                <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
-                  <Calendar className="w-4 h-4 text-slate-400" />
-                  Date
-                </label>
-                <input
-                  type="date"
-                  min={today}
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  disabled={isScheduling}
-                  className="w-full border border-slate-200 rounded-lg px-4 py-2.5 text-sm focus:ring-2 focus:ring-[#0A66C2] focus:border-transparent outline-none transition-shadow disabled:opacity-50"
-                />
-              </div>
-
-              <div>
-                <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
-                  <Clock className="w-4 h-4 text-slate-400" />
-                  Time
-                </label>
-                <input
-                  type="time"
-                  value={time}
-                  onChange={(e) => setTime(e.target.value)}
-                  disabled={isScheduling}
-                  className="w-full border border-slate-200 rounded-lg px-4 py-2.5 text-sm focus:ring-2 focus:ring-[#0A66C2] focus:border-transparent outline-none transition-shadow disabled:opacity-50"
-                />
-              </div>
-
-              {date && time && (
-                <p className="text-xs text-slate-500 bg-slate-50 rounded-lg p-3">
-                  Will be published on{' '}
-                  <span className="font-semibold text-slate-700">
-                    {new Date(`${date}T${time}:00`).toLocaleString(undefined, {
-                      weekday: 'short', month: 'short', day: 'numeric',
-                      hour: 'numeric', minute: '2-digit', hour12: true
-                    })}
-                  </span>
-                  {' '}(your local time)
-                </p>
-              )}
-            </div>
-
-            {/* Footer */}
-            <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-3">
-              <button
-                onClick={onClose}
-                disabled={isScheduling}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-700 transition-colors disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirm}
-                disabled={!date || !time || isScheduling}
-                className="flex items-center gap-2 px-6 py-2 rounded-lg text-sm font-semibold bg-[#0A66C2] text-white hover:bg-[#004182] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              >
-                {isScheduling ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Scheduling...
-                  </>
-                ) : (
-                  'Confirm Schedule'
-                )}
-              </button>
-            </div>
-          </motion.div>
-        </motion.div>
+    <Modal
+      open={isOpen}
+      onClose={isScheduling ? undefined : onClose}
+      title="Schedule post"
+      description="Pick when it should go live. Times are in your local time zone."
+      size="sm"
+      footer={(
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={isScheduling}>Cancel</Button>
+          <Button variant="accent" icon={CalendarCheck} onClick={handleConfirm} disabled={!picked || inPast} loading={isScheduling}>
+            {isScheduling ? 'Scheduling…' : 'Schedule'}
+          </Button>
+        </>
       )}
-    </AnimatePresence>
+    >
+      <div className="mb-5 flex flex-wrap gap-2">
+        {quickPicks().map((q, i) => {
+          const active = date === toDateInput(q.date) && time === toTimeInput(q.date);
+          return (
+            <motion.button
+              key={q.label}
+              type="button"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.05 + i * 0.05 }}
+              whileTap={{ scale: 0.96 }}
+              onClick={() => { setDate(toDateInput(q.date)); setTime(toTimeInput(q.date)); }}
+              disabled={isScheduling}
+              className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                active ? 'border-accent bg-accent/15 text-accent-ink' : 'border-line bg-surface-2/60 text-ink-soft hover:border-accent/40 hover:text-ink'
+              }`}
+            >
+              {q.label}
+            </motion.button>
+          );
+        })}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-ink-soft"><Calendar className="h-3.5 w-3.5" /> Date</span>
+          <input type="date" min={today} value={date} onChange={(e) => setDate(e.target.value)} disabled={isScheduling} className="field" />
+        </label>
+        <label className="block">
+          <span className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-ink-soft"><Clock className="h-3.5 w-3.5" /> Time</span>
+          <input type="time" value={time} onChange={(e) => setTime(e.target.value)} disabled={isScheduling} className="field" />
+        </label>
+      </div>
+
+      {picked && (
+        <motion.p
+          key={`${date}${time}`}
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          className={`mt-4 rounded-xl px-3 py-2.5 text-xs ${inPast ? 'bg-danger/10 text-danger' : 'bg-surface-2 text-ink-soft'}`}
+        >
+          {inPast ? 'That time has already passed. Pick a later one.' : (
+            <>Goes live <span className="font-semibold text-ink">{picked.toLocaleString(undefined, { weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span></>
+          )}
+        </motion.p>
+      )}
+    </Modal>
   );
 };
 

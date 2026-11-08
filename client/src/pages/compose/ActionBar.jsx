@@ -1,15 +1,15 @@
-import React, { useState } from 'react';
-import { Copy, Calendar, Send, Check, Loader2 } from 'lucide-react';
+import { useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { Copy, CalendarClock, Send, Check } from 'lucide-react';
 import { htmlToLinkedInText } from './unicodeFormatter';
+import { Button } from '../../components/ui';
 
-const ActionBar = ({ editorHtml, onScheduleClick, onPostNow, isPosting }) => {
+const ActionBar = ({ editorHtml, onScheduleClick, onPostNow, isPosting, providerName = 'LinkedIn' }) => {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
-    const linkedInText = htmlToLinkedInText(editorHtml);
-
     try {
-      await navigator.clipboard.writeText(linkedInText);
+      await navigator.clipboard.writeText(htmlToLinkedInText(editorHtml));
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
@@ -20,51 +20,35 @@ const ActionBar = ({ editorHtml, onScheduleClick, onPostNow, isPosting }) => {
   const hasContent = editorHtml && editorHtml.replace(/<br\s*\/?>/g, '').replace(/<div><\/div>/g, '').trim().length > 0;
 
   return (
-    <div className="border-t border-slate-200 bg-slate-50/80 px-4 py-3 rounded-b-xl flex items-center justify-between gap-3">
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-b-[1.25rem] border-t border-line bg-surface-2/40 px-4 py-3">
       <div className="flex items-center gap-2">
-        <button
+        <Button
+          variant="outline"
           onClick={handleCopy}
           disabled={!hasContent}
-          className={`
-            flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200
-            ${copied
-              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-              : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 hover:text-slate-800 hover:border-slate-300'
-            }
-            disabled:opacity-40 disabled:cursor-not-allowed
-          `}
+          className={copied ? '!border-success/40 !text-success' : ''}
         >
-          {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-          {copied ? 'Copied!' : 'Copy'}
-        </button>
-
-        <button
-          onClick={onScheduleClick}
-          disabled={!hasContent || isPosting}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 hover:text-slate-800 hover:border-slate-300 transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <Calendar className="w-4 h-4" />
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.span
+              key={copied ? 'done' : 'copy'}
+              initial={{ scale: 0.4, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.4, opacity: 0 }}
+              transition={{ duration: 0.15 }}
+            >
+              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+            </motion.span>
+          </AnimatePresence>
+          {copied ? 'Copied' : 'Copy'}
+        </Button>
+        <Button variant="outline" icon={CalendarClock} onClick={onScheduleClick} disabled={!hasContent || isPosting}>
           Schedule
-        </button>
+        </Button>
       </div>
 
-      <button
-        onClick={onPostNow}
-        disabled={!hasContent || isPosting}
-        className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold bg-[#0A66C2] text-white hover:bg-[#004182] shadow-sm hover:shadow-md transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.98]"
-      >
-        {isPosting ? (
-          <>
-            <Loader2 className="w-4 h-4 animate-spin" />
-            Posting...
-          </>
-        ) : (
-          <>
-            <Send className="w-4 h-4" />
-            Post Now
-          </>
-        )}
-      </button>
+      <Button variant="accent" size="lg" icon={Send} onClick={onPostNow} disabled={!hasContent} loading={isPosting} className="!h-11">
+        {isPosting ? 'Posting…' : `Post to ${providerName}`}
+      </Button>
     </div>
   );
 };

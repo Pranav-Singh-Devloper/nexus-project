@@ -1,33 +1,40 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
-  Layout, Files, PenLine, Plus, Pencil, Trash2, Copy, ExternalLink, CalendarX, Eye,
-  AlertCircle, Clock, CheckCircle2, XCircle, FileText, Loader2, RefreshCw, LogOut
+  Files, PenLine, Plus, Pencil, Trash2, Copy, ExternalLink, CalendarX, Eye,
+  AlertCircle, Clock, CheckCircle2, XCircle, FileText, RefreshCw, Linkedin, Twitter, BookOpen,
 } from 'lucide-react';
 import { API_URL } from '../config';
+import { useCurrentUser } from '../lib/useCurrentUser';
+import { useToast } from '../lib/toast';
+import { ease } from '../lib/motion';
+import { waitForSaves } from '../lib/draftSync';
 import { connectionInfo, reconnectUrl, formatExpiry } from '../utils/connections';
+import { Badge, Banner, Button, EmptyState, PageHeader, Segmented, Skeleton } from '../components/ui';
 
 const TABS = [
-  { key: 'all', label: 'All' },
-  { key: 'draft', label: 'Drafts' },
-  { key: 'scheduled', label: 'Scheduled' },
-  { key: 'published', label: 'Published' },
-  { key: 'failed', label: 'Failed' },
+  { value: 'all', label: 'All' },
+  { value: 'draft', label: 'Drafts' },
+  { value: 'scheduled', label: 'Scheduled' },
+  { value: 'published', label: 'Published' },
+  { value: 'failed', label: 'Failed' },
 ];
 
-const STATUS_STYLE = {
-  draft: { label: 'Draft', icon: FileText, cls: 'bg-slate-100 text-slate-700 border-slate-200' },
-  scheduled: { label: 'Scheduled', icon: Clock, cls: 'bg-blue-50 text-blue-700 border-blue-100' },
-  published: { label: 'Published', icon: CheckCircle2, cls: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
-  failed: { label: 'Failed', icon: XCircle, cls: 'bg-red-50 text-red-700 border-red-100' },
+const STATUS = {
+  draft: { label: 'Draft', icon: FileText, tone: 'neutral', stripe: 'bg-line-strong' },
+  scheduled: { label: 'Scheduled', icon: Clock, tone: 'info', stripe: 'bg-info' },
+  published: { label: 'Published', icon: CheckCircle2, tone: 'success', stripe: 'bg-success' },
+  failed: { label: 'Failed', icon: XCircle, tone: 'danger', stripe: 'bg-danger' },
 };
 
-const EMPTY_TEXT = {
-  all: 'No posts yet. Write one in the composer or generate one from a research report.',
-  draft: 'No drafts. Anything you write in the composer is saved here automatically.',
-  scheduled: 'Nothing scheduled.',
-  published: 'Nothing published from Nexus yet.',
-  failed: 'No failed posts.',
+const EMPTY = {
+  all: ['No posts yet', 'Write one in the composer or generate one from a research report.'],
+  draft: ['No drafts', 'Anything you write in the composer is saved here automatically.'],
+  scheduled: ['Nothing scheduled', 'Schedule a post from the composer and it will wait here.'],
+  published: ['Nothing published yet', 'Posts you publish from Nexus show up here.'],
+  failed: ['No failed posts', 'All good. Nothing needs your attention.'],
 };
 
 // HTML from the editor -> readable plain text for the card preview
@@ -51,128 +58,143 @@ const formatDateTime = (date) => new Date(date).toLocaleString(undefined, {
 });
 
 function timeLabel(d) {
-  if (d.status === 'scheduled' && d.scheduledAt) return `Scheduled for ${formatDateTime(d.scheduledAt)}`;
-  if (d.status === 'published' && d.publishedAt) return `Published ${formatDateTime(d.publishedAt)}`;
+  if (d.status === 'scheduled' && d.scheduledAt) return `For ${formatDateTime(d.scheduledAt)}`;
+  if (d.status === 'published' && d.publishedAt) return formatDateTime(d.publishedAt);
   return `Edited ${relativeTime(d.updatedAt)}`;
 }
 
 const providerLabel = (p) => (p === 'x' ? 'X' : p === 'linkedin' ? 'LinkedIn' : null);
+const ProviderIcon = ({ provider }) => {
+  if (provider === 'linkedin') return <Linkedin className="h-3.5 w-3.5" />;
+  if (provider === 'x') return <Twitter className="h-3.5 w-3.5" />;
+  return null;
+};
 
-const PostCard = ({ draft, busy, onDelete, onDuplicate, onUnschedule }) => {
+const PostCard = ({ draft, index = 0, busy, onDelete, onDuplicate, onUnschedule }) => {
   const [confirming, setConfirming] = useState(false);
-  const status = STATUS_STYLE[draft.status] || STATUS_STYLE.draft;
-  const StatusIcon = status.icon;
+  const status = STATUS[draft.status] || STATUS.draft;
   const text = previewText(draft.html);
   const editable = draft.status === 'draft' || draft.status === 'failed';
-  const btn = 'inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg transition-colors disabled:opacity-50';
 
   return (
-    <article className="bg-white border border-slate-200 rounded-xl shadow-sm hover:shadow-md transition-shadow flex flex-col overflow-hidden">
-      <div className="p-4 flex-1 flex flex-col gap-3 min-w-0">
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-          <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border ${status.cls}`}>
-            <StatusIcon className="w-3.5 h-3.5" /> {status.label}
-            {providerLabel(draft.provider) && <span className="opacity-70">· {providerLabel(draft.provider)}</span>}
-          </span>
-          <span className="text-xs text-slate-400">{timeLabel(draft)}</span>
+    <motion.article
+      layout
+      initial={{ opacity: 0, y: 16, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1, transition: { duration: 0.45, ease, delay: Math.min(index, 8) * 0.04 } }}
+      exit={{ opacity: 0, scale: 0.94, transition: { duration: 0.2 } }}
+      transition={{ duration: 0.45, ease }}
+      className="card card-hover group relative flex flex-col overflow-hidden"
+    >
+      <span className={`absolute inset-y-0 left-0 w-1 ${status.stripe} opacity-70 transition-all duration-300 group-hover:w-1.5 group-hover:opacity-100`} />
+
+      <Link to={`/compose?draft=${draft.id}`} className="flex flex-1 flex-col gap-3 p-5 pl-6">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Badge tone={status.tone} icon={status.icon}>
+            {status.label}
+            {providerLabel(draft.provider) && <span className="flex items-center gap-1 opacity-75">· <ProviderIcon provider={draft.provider} /></span>}
+          </Badge>
+          <span className="text-xs font-medium text-muted">{timeLabel(draft)}</span>
         </div>
 
-        <div className="flex gap-3 min-w-0">
-          <p className={`flex-1 min-w-0 text-sm whitespace-pre-line line-clamp-5 break-words ${text ? 'text-slate-700' : 'text-slate-400 italic'}`}>
+        <div className="flex min-w-0 gap-3">
+          <p className={`line-clamp-5 min-w-0 flex-1 whitespace-pre-line break-words text-sm leading-relaxed ${text ? 'text-ink-soft' : 'italic text-muted'}`}>
             {text || 'Empty draft'}
           </p>
           {draft.imageUrl && (
-            <img
-              src={draft.imageUrl}
-              alt=""
-              className="w-16 h-16 sm:w-20 sm:h-20 rounded-lg object-cover border border-slate-100 shrink-0"
-              loading="lazy"
-              onError={(e) => { e.currentTarget.style.display = 'none'; }}
-            />
+            <div className="h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-line">
+              <img
+                src={draft.imageUrl}
+                alt=""
+                className="h-full w-full object-cover transition-transform duration-700 group-hover:scale-110"
+                loading="lazy"
+                onError={(e) => { e.currentTarget.parentElement.style.display = 'none'; }}
+              />
+            </div>
           )}
         </div>
 
         {draft.status === 'failed' && draft.error && (
-          <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-2.5 py-1.5 flex items-start gap-1.5">
-            <AlertCircle className="w-3.5 h-3.5 mt-px shrink-0" /> {draft.error}
+          <p className="flex items-start gap-1.5 rounded-xl border border-danger/25 bg-danger/10 px-3 py-2 text-xs text-danger">
+            <AlertCircle className="mt-px h-3.5 w-3.5 shrink-0" /> {draft.error}
           </p>
         )}
 
         {draft.project && (
-          <p className="text-xs text-slate-400 truncate">
-            From research: <a href={`/projects/${draft.project.id}`} className="text-slate-600 hover:underline">{draft.project.title}</a>
+          <p className="mt-auto flex items-center gap-1.5 truncate text-xs text-muted">
+            <BookOpen className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">{draft.project.title}</span>
           </p>
         )}
-      </div>
+      </Link>
 
-      <div className="border-t border-slate-100 bg-slate-50/60 px-3 py-2 flex items-center gap-1.5 flex-wrap">
-        {confirming ? (
-          <>
-            <span className="text-xs text-slate-600 mr-auto">
-              {draft.status === 'published' ? 'Remove from Nexus? The live post stays up.' : 'Delete this post?'}
-            </span>
-            <button className={`${btn} text-slate-600 hover:bg-slate-100`} onClick={() => setConfirming(false)} disabled={busy}>Cancel</button>
-            <button className={`${btn} text-white bg-red-600 hover:bg-red-700`} onClick={() => onDelete(draft)} disabled={busy}>
-              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />} Delete
-            </button>
-          </>
-        ) : (
-          <>
-            {editable ? (
-              <a href={`/compose?draft=${draft.id}`} className={`${btn} text-white bg-slate-800 hover:bg-slate-900`}>
-                <Pencil className="w-3.5 h-3.5" /> {draft.status === 'failed' ? 'Edit & retry' : 'Edit'}
-              </a>
-            ) : (
-              <a href={`/compose?draft=${draft.id}`} className={`${btn} text-slate-700 hover:bg-slate-100`}>
-                <Eye className="w-3.5 h-3.5" /> View
-              </a>
-            )}
-            {draft.status === 'published' && draft.postUrl && (
-              <a href={draft.postUrl} target="_blank" rel="noopener noreferrer" className={`${btn} text-[#0A66C2] hover:bg-blue-50`}>
-                <ExternalLink className="w-3.5 h-3.5" /> Open on {providerLabel(draft.provider) || 'site'}
-              </a>
-            )}
-            {draft.status === 'scheduled' && (
-              <button className={`${btn} text-slate-700 hover:bg-slate-100`} onClick={() => onUnschedule(draft)} disabled={busy}>
-                <CalendarX className="w-3.5 h-3.5" /> Cancel schedule
-              </button>
-            )}
-            <button className={`${btn} text-slate-700 hover:bg-slate-100`} onClick={() => onDuplicate(draft)} disabled={busy}>
-              <Copy className="w-3.5 h-3.5" /> Duplicate
-            </button>
-            <button className={`${btn} text-slate-500 hover:text-red-600 hover:bg-red-50 ml-auto`} onClick={() => setConfirming(true)} disabled={busy} aria-label="Delete">
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          </>
-        )}
+      <div className="flex min-h-[52px] flex-wrap items-center gap-1 border-t border-line bg-surface-2/40 px-3 py-2">
+        <AnimatePresence mode="wait" initial={false}>
+          {confirming ? (
+            <motion.div key="confirm" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }} className="flex w-full items-center gap-1">
+              <span className="mr-auto pl-1 text-xs font-medium text-ink-soft">
+                {draft.status === 'published' ? 'Remove from Nexus? The live post stays up.' : 'Delete this post?'}
+              </span>
+              <Button size="sm" variant="ghost" onClick={() => setConfirming(false)} disabled={busy}>Cancel</Button>
+              <Button size="sm" variant="danger" icon={Trash2} onClick={() => onDelete(draft)} loading={busy}>Delete</Button>
+            </motion.div>
+          ) : (
+            <motion.div key="actions" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }} className="flex w-full flex-wrap items-center gap-1">
+              {editable ? (
+                <Button size="sm" variant="primary" icon={Pencil} to={`/compose?draft=${draft.id}`}>
+                  {draft.status === 'failed' ? 'Edit & retry' : 'Edit'}
+                </Button>
+              ) : (
+                <Button size="sm" variant="ghost" icon={Eye} to={`/compose?draft=${draft.id}`}>View</Button>
+              )}
+              {draft.status === 'published' && draft.postUrl && (
+                <Button size="sm" variant="ghost" icon={ExternalLink} href={draft.postUrl} target="_blank" rel="noopener noreferrer">
+                  {providerLabel(draft.provider) || 'Open'}
+                </Button>
+              )}
+              {draft.status === 'scheduled' && (
+                <Button size="sm" variant="ghost" icon={CalendarX} onClick={() => onUnschedule(draft)} disabled={busy}>Unschedule</Button>
+              )}
+              <span className="ml-auto flex items-center gap-0.5">
+                <Button size="icon-sm" variant="ghost" icon={Copy} onClick={() => onDuplicate(draft)} disabled={busy} title="Duplicate" aria-label="Duplicate" />
+                <Button size="icon-sm" variant="danger-ghost" icon={Trash2} onClick={() => setConfirming(true)} disabled={busy} title="Delete" aria-label="Delete" />
+              </span>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
-    </article>
+    </motion.article>
   );
 };
 
+const GridSkeleton = () => (
+  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+    {[0, 1, 2].map(i => (
+      <div key={i} className="card space-y-3 p-5">
+        <div className="flex justify-between"><Skeleton className="h-5 w-24 !rounded-full" /><Skeleton className="h-4 w-16" /></div>
+        <Skeleton className="h-4" /><Skeleton className="h-4 w-11/12" /><Skeleton className="h-4 w-3/5" />
+      </div>
+    ))}
+  </div>
+);
+
 const Posts = () => {
-  const [user, setUser] = useState(null);
+  const user = useCurrentUser();
+  const toast = useToast();
+  const navigate = useNavigate();
   const [tab, setTab] = useState(() => {
     const t = new URLSearchParams(window.location.search).get('tab');
-    return TABS.some(x => x.key === t) ? t : 'all';
+    return TABS.some(x => x.value === t) ? t : 'all';
   });
   const [drafts, setDrafts] = useState([]);
   const [counts, setCounts] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [busyId, setBusyId] = useState(null);
-  const [notice, setNotice] = useState(null);
 
-  useEffect(() => {
-    axios.get(`${API_URL}/api/current_user`, { withCredentials: true })
-      .then(res => { if (!res.data) window.location.href = '/'; setUser(res.data); })
-      .catch(() => { window.location.href = '/'; });
-  }, []);
-
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async ({ quiet = false } = {}) => {
+    if (!quiet) setLoading(true);
     setError(null);
     try {
+      await waitForSaves();
       const res = await axios.get(`${API_URL}/api/drafts?status=${tab}`, { withCredentials: true });
       setDrafts(res.data.drafts);
       setCounts(res.data.counts);
@@ -186,18 +208,17 @@ const Posts = () => {
 
   useEffect(() => {
     load();
-    window.history.replaceState({}, '', tab === 'all' ? '/posts' : `/posts?tab=${tab}`);
+    window.history.replaceState(window.history.state, '', tab === 'all' ? '/posts' : `/posts?tab=${tab}`);
   }, [load, tab]);
 
   const act = async (draft, fn, message) => {
     setBusyId(draft.id);
-    setNotice(null);
     try {
       await fn();
-      if (message) setNotice({ type: 'success', message });
-      await load();
+      if (message) toast.success(message);
+      await load({ quiet: true });
     } catch (err) {
-      setNotice({ type: 'error', message: err.response?.data?.error || 'Something went wrong. Try again.' });
+      toast.error(err.response?.data?.error || 'Something went wrong. Try again.');
     } finally {
       setBusyId(null);
     }
@@ -209,117 +230,61 @@ const Posts = () => {
     setBusyId(d.id);
     try {
       const res = await axios.post(`${API_URL}/api/drafts/${d.id}/duplicate`, {}, { withCredentials: true });
-      window.location.href = `/compose?draft=${res.data.id}`;
+      navigate(`/compose?draft=${res.data.id}`);
     } catch {
-      setNotice({ type: 'error', message: 'Could not duplicate this post.' });
+      toast.error('Could not duplicate this post.');
       setBusyId(null);
     }
   };
 
   const linkedin = user ? connectionInfo(user, 'linkedin') : null;
   const hasLinkedInAccount = user?.socialAccounts?.some(a => a.provider === 'linkedin');
+  const options = TABS.map(t => ({ ...t, count: counts[t.value], alert: t.value === 'failed' }));
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <nav className="bg-white px-4 sm:px-6 py-3.5 shadow-sm flex justify-between items-center sticky top-0 z-30 border-b border-slate-100">
-        <div className="flex items-center gap-3 sm:gap-4 min-w-0">
-          <a href="/dashboard" className="text-xl font-bold flex items-center gap-2 text-slate-900 hover:opacity-80 transition-opacity">
-            <Layout className="w-5 h-5" /> Nexus
-          </a>
-          <span className="text-slate-300">/</span>
-          <span className="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
-            <Files className="w-4 h-4" /> Posts
-          </span>
-        </div>
-        <div className="flex items-center gap-3 sm:gap-4">
-          <a href="/compose" className="flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors">
-            <PenLine className="w-4 h-4" /> <span className="hidden sm:inline">Compose</span>
-          </a>
-          {user && (
-            <a href="/profile" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-              <img src={user.avatar} alt="User" className="w-8 h-8 rounded-full border" />
-            </a>
-          )}
-          <a href={`${API_URL}/api/logout`} className="text-slate-500 hover:text-red-500 transition-colors" title="Logout">
-            <LogOut className="w-5 h-5" />
-          </a>
-        </div>
-      </nav>
+    <div className="mx-auto max-w-6xl px-4 pt-8 sm:px-6 sm:pt-12">
+      <PageHeader
+        eyebrow="Library"
+        title="Posts"
+        description="Your drafts, scheduled posts and everything you've published."
+        actions={<Button variant="accent" size="lg" icon={Plus} to="/compose">New post</Button>}
+      />
 
-      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">Posts</h1>
-            <p className="text-sm text-slate-500 mt-1">Your drafts, scheduled posts and post history.</p>
-          </div>
-          <a href="/compose" className="inline-flex items-center justify-center gap-2 bg-slate-900 hover:bg-black text-white text-sm font-semibold px-4 py-2.5 rounded-lg shadow-sm transition-colors self-start">
-            <Plus className="w-4 h-4" /> New post
-          </a>
-        </div>
+      {hasLinkedInAccount && (linkedin.expired || linkedin.expiringSoon) && (
+        <Banner
+          tone={linkedin.expired ? 'danger' : 'warning'}
+          icon={AlertCircle}
+          className="mb-6"
+          title={linkedin.expired ? 'LinkedIn connection expired' : `LinkedIn connection ${formatExpiry(linkedin).toLowerCase()}`}
+          action={<Button href={reconnectUrl('linkedin', '/posts')} variant="accent" size="sm" icon={RefreshCw}>Reconnect LinkedIn</Button>}
+        >
+          {linkedin.expired ? 'Scheduled posts will fail until you reconnect.' : 'Reconnect to keep scheduled posts working.'}
+        </Banner>
+      )}
 
-        {hasLinkedInAccount && (linkedin.expired || linkedin.expiringSoon) && (
-          <div className={`mb-6 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3 border ${linkedin.expired ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
-            <AlertCircle className={`w-5 h-5 shrink-0 ${linkedin.expired ? 'text-red-500' : 'text-amber-500'}`} />
-            <p className={`flex-1 text-sm ${linkedin.expired ? 'text-red-800' : 'text-amber-800'}`}>
-              {linkedin.expired
-                ? 'Your LinkedIn connection has expired, so scheduled posts will fail until you reconnect.'
-                : `Your LinkedIn connection ${formatExpiry(linkedin).toLowerCase()}. Reconnect to keep scheduled posts working.`}
-            </p>
-            <a href={reconnectUrl('linkedin', '/posts')} className="text-xs font-semibold text-white bg-[#0A66C2] hover:bg-[#004182] px-3 py-1.5 rounded-lg self-start sm:self-auto inline-flex items-center gap-1.5">
-              <RefreshCw className="w-3.5 h-3.5" /> Reconnect LinkedIn
-            </a>
-          </div>
-        )}
+      <div className="mb-6">
+        <Segmented options={options} value={tab} onChange={setTab} />
+      </div>
 
-        <div className="flex gap-1 overflow-x-auto pb-1 mb-6 border-b border-slate-200" role="tablist">
-          {TABS.map(t => (
-            <button
-              key={t.key}
-              role="tab"
-              aria-selected={tab === t.key}
-              onClick={() => setTab(t.key)}
-              className={`shrink-0 px-3 sm:px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                tab === t.key ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              {t.label}
-              {counts[t.key] > 0 && (
-                <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${t.key === 'failed' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-600'}`}>
-                  {counts[t.key]}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-
-        {notice && (
-          <div className={`mb-4 text-sm rounded-lg px-4 py-2.5 border ${notice.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
-            {notice.message}
-          </div>
-        )}
-
-        {loading ? (
-          <div className="flex justify-center py-20 text-slate-400"><Loader2 className="w-6 h-6 animate-spin" /></div>
-        ) : error ? (
-          <div className="text-center py-16">
-            <p className="text-slate-600 mb-3">{error}</p>
-            <button onClick={load} className="text-sm font-medium text-slate-800 underline">Try again</button>
-          </div>
-        ) : drafts.length === 0 ? (
-          <div className="text-center py-16 bg-white border border-dashed border-slate-200 rounded-xl">
-            <Files className="w-8 h-8 text-slate-300 mx-auto mb-3" />
-            <p className="text-slate-500 text-sm max-w-sm mx-auto">{EMPTY_TEXT[tab]}</p>
-            {(tab === 'all' || tab === 'draft') && (
-              <a href="/compose" className="inline-flex items-center gap-1.5 mt-4 text-sm font-semibold text-slate-800 hover:underline">
-                <PenLine className="w-4 h-4" /> Write a post
-              </a>
-            )}
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {drafts.map(d => (
+      {loading ? (
+        <GridSkeleton />
+      ) : error ? (
+        <EmptyState icon={AlertCircle} title={error} action={<Button variant="outline" icon={RefreshCw} onClick={() => load()}>Try again</Button>} />
+      ) : drafts.length === 0 ? (
+        <EmptyState
+          icon={tab === 'failed' ? CheckCircle2 : Files}
+          title={EMPTY[tab][0]}
+          action={(tab === 'all' || tab === 'draft') && <Button variant="accent" icon={PenLine} to="/compose">Write a post</Button>}
+        >
+          {EMPTY[tab][1]}
+        </EmptyState>
+      ) : (
+        <motion.div layout className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <AnimatePresence>
+            {drafts.map((d, i) => (
               <PostCard
                 key={d.id}
+                index={i}
                 draft={d}
                 busy={busyId === d.id}
                 onDelete={handleDelete}
@@ -327,9 +292,9 @@ const Posts = () => {
                 onUnschedule={handleUnschedule}
               />
             ))}
-          </div>
-        )}
-      </main>
+          </AnimatePresence>
+        </motion.div>
+      )}
     </div>
   );
 };

@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
   Bold, Italic, Underline, Strikethrough, List, ListOrdered,
   Undo2, Redo2, RemoveFormatting, Smile, Link2, X
@@ -17,13 +18,24 @@ const ToolButton = ({ onClick, title, children, active }) => (
     onMouseDown={(e) => e.preventDefault()} // Prevent editor blur
     onClick={onClick}
     title={title}
-    className={`p-2 rounded-lg transition-all duration-150 hover:bg-slate-100 active:scale-95 ${active ? 'bg-slate-200 text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}
+    aria-label={title}
+    aria-pressed={active}
+    className={`rounded-lg p-2 transition-all duration-150 active:scale-90 ${active ? 'bg-accent/15 text-accent-ink' : 'text-muted hover:bg-surface-2 hover:text-ink'}`}
   >
     {children}
   </button>
 );
 
-const Divider = () => <div className="w-px h-6 bg-slate-200 mx-1" />;
+const Divider = () => <div className="mx-1 h-6 w-px bg-line" />;
+
+// Pop-in animation for the emoji and link popovers
+const POP = {
+  initial: { opacity: 0, y: -6, scale: 0.97 },
+  animate: { opacity: 1, y: 0, scale: 1 },
+  exit: { opacity: 0, y: -4, scale: 0.98, transition: { duration: 0.12 } },
+  transition: { duration: 0.2, ease: [0.16, 1, 0.3, 1] },
+  style: { transformOrigin: 'top left' },
+};
 
 // --- Manual DOM Wrapping Helpers ---
 
@@ -149,8 +161,6 @@ const EditorToolbar = ({ editorRef, onContentChange }) => {
     anchor.target = '_blank';
     anchor.rel = 'noopener noreferrer';
     anchor.textContent = linkText || linkUrl;
-    anchor.style.color = '#0A66C2';
-    anchor.style.textDecoration = 'underline';
 
     range.deleteContents();
     range.insertNode(anchor);
@@ -173,7 +183,7 @@ const EditorToolbar = ({ editorRef, onContentChange }) => {
 
 
   return (
-    <div className="relative border-b border-slate-200 bg-white px-3 py-2 rounded-t-xl">
+    <div className="relative rounded-t-[1.25rem] border-b border-line bg-surface-2/40 px-3 py-2">
       <div className="flex items-center flex-wrap gap-0.5">
         <ToolButton onClick={() => exec('bold')} title="Bold (Cmd+B)">
           <Bold className="w-4 h-4" />
@@ -219,12 +229,13 @@ const EditorToolbar = ({ editorRef, onContentChange }) => {
         </ToolButton>
       </div>
 
+      <AnimatePresence>
       {/* Emoji Picker Popup */}
       {showEmojiPicker && (
-        <div className="absolute top-full left-0 mt-2 z-50 bg-white border border-slate-200 rounded-xl shadow-xl p-3 w-72 animate-in fade-in duration-150">
+        <motion.div key="emoji" {...POP} className="card absolute left-0 top-full z-50 mt-2 w-72 !bg-surface-solid p-3 !shadow-float">
           <div className="flex justify-between items-center mb-2">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Emoji</span>
-            <button onClick={() => setShowEmojiPicker(false)} className="text-slate-400 hover:text-slate-600">
+            <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted">Emoji</span>
+            <button onClick={() => setShowEmojiPicker(false)} className="rounded-md p-1 text-muted hover:bg-surface-2 hover:text-ink" aria-label="Close">
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -234,21 +245,21 @@ const EditorToolbar = ({ editorRef, onContentChange }) => {
                 key={emoji}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => handleEmoji(emoji)}
-                className="text-xl p-1 rounded hover:bg-slate-100 transition-colors cursor-pointer"
+                className="cursor-pointer rounded-lg p-1 text-xl transition-transform duration-150 hover:scale-125 hover:bg-surface-2"
               >
                 {emoji}
               </button>
             ))}
           </div>
-        </div>
+        </motion.div>
       )}
 
       {/* Link Input Popup */}
       {showLinkInput && (
-        <div className="absolute top-full left-0 mt-2 z-50 bg-white border border-slate-200 rounded-xl shadow-xl p-4 w-80 animate-in fade-in duration-150">
+        <motion.div key="link" {...POP} className="card absolute left-0 top-full z-50 mt-2 w-80 !bg-surface-solid p-4 !shadow-float">
           <div className="flex justify-between items-center mb-3">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Insert Link</span>
-            <button onClick={() => setShowLinkInput(false)} className="text-slate-400 hover:text-slate-600">
+            <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted">Insert link</span>
+            <button onClick={() => setShowLinkInput(false)} className="rounded-md p-1 text-muted hover:bg-surface-2 hover:text-ink" aria-label="Close">
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -257,7 +268,7 @@ const EditorToolbar = ({ editorRef, onContentChange }) => {
             placeholder="Link text (optional)"
             value={linkText}
             onChange={(e) => setLinkText(e.target.value)}
-            className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm mb-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+            className="field mb-2 !py-2 !text-sm"
           />
           <input
             type="url"
@@ -265,17 +276,18 @@ const EditorToolbar = ({ editorRef, onContentChange }) => {
             value={linkUrl}
             onChange={(e) => setLinkUrl(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleInsertLink()}
-            className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm mb-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+            className="field mb-3 !py-2 !text-sm"
           />
           <button
             onClick={handleInsertLink}
             disabled={!linkUrl.trim()}
-            className="w-full bg-[#0A66C2] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#004182] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="w-full rounded-xl bg-primary py-2 text-sm font-semibold text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Insert Link
+            Insert link
           </button>
-        </div>
+        </motion.div>
       )}
+      </AnimatePresence>
     </div>
   );
 };

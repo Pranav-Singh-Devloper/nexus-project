@@ -1,7 +1,7 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import DOMPurify from 'dompurify';
 import { ThumbsUp, MessageCircle, Repeat2, Send, Globe, FileText, Image, Smile } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 
 // --- Preview Transform Pipeline ---
 
@@ -63,23 +63,23 @@ const LinkedInPreview = ({ html, user, imageUrl, isGeneratingImage }) => {
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
-      className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden"
+      className="card overflow-hidden"
     >
       {/* Header */}
       <div className="p-4 pb-3">
         <div className="flex items-start gap-3">
           {userAvatar ? (
-            <img src={userAvatar} alt="" className="w-12 h-12 rounded-full border-2 border-slate-100 shrink-0" />
+            <img src={userAvatar} alt="" referrerPolicy="no-referrer" className="h-12 w-12 shrink-0 rounded-full object-cover ring-2 ring-line" />
           ) : (
-            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-slate-300 to-slate-400 flex items-center justify-center text-white text-lg font-bold shrink-0">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-accent text-lg font-bold text-on-accent">
               {userName.charAt(0).toUpperCase()}
             </div>
           )}
           <div className="min-w-0">
-            <h4 className="font-semibold text-[15px] text-slate-900 leading-tight">{userName}</h4>
-            <p className="text-xs text-slate-500 leading-tight mt-0.5 truncate">Nexus User • Building something great</p>
-            <div className="flex items-center gap-1 mt-1 text-xs text-slate-400">
-              <span>12h</span>
+            <h4 className="text-[15px] font-semibold leading-tight text-ink">{userName}</h4>
+            <p className="mt-0.5 truncate text-xs leading-tight text-muted">Nexus User • Building something great</p>
+            <div className="mt-1 flex items-center gap-1 text-xs text-muted">
+              <span>Now</span>
               <span>•</span>
               <Globe className="w-3 h-3" />
             </div>
@@ -91,14 +91,14 @@ const LinkedInPreview = ({ html, user, imageUrl, isGeneratingImage }) => {
       <div className="px-4 pb-3">
         {isEmpty ? (
           <div className="py-8 text-center">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-50 mb-4">
-              <FileText className="w-7 h-7 text-slate-300" />
+            <div className="mb-4 inline-flex h-16 w-16 animate-float items-center justify-center rounded-full bg-surface-2">
+              <FileText className="h-7 w-7 text-muted" />
             </div>
-            <p className="text-sm text-slate-400 font-medium mb-2">Start writing and your post will appear here...</p>
-            <div className="flex justify-center gap-4 text-xs text-slate-300">
+            <p className="mb-2 text-sm font-medium text-muted">Start writing and your post will appear here…</p>
+            <div className="flex justify-center gap-4 text-xs text-muted/70">
               <span className="flex items-center gap-1"><Smile className="w-3 h-3" /> Emojis</span>
               <span className="flex items-center gap-1"><Image className="w-3 h-3" /> Images</span>
-              <span className="flex items-center gap-1 text-[#0A66C2]/40"># Hashtags</span>
+              <span className="flex items-center gap-1 text-info/70"># Hashtags</span>
             </div>
           </div>
         ) : (
@@ -107,28 +107,28 @@ const LinkedInPreview = ({ html, user, imageUrl, isGeneratingImage }) => {
               <div
                 ref={contentRef}
                 className={`
-                  text-[14px] leading-[24px] text-slate-800 break-words
-                  [&_.li-hashtag]:text-[#0A66C2] [&_.li-hashtag]:font-semibold [&_.li-hashtag]:cursor-pointer [&_.li-hashtag]:hover:underline
-                  [&_.li-link]:text-[#0A66C2] [&_.li-link]:hover:underline
+                  text-[14px] leading-[24px] text-ink break-words
+                  [&_.li-hashtag]:text-info [&_.li-hashtag]:font-semibold [&_.li-hashtag]:cursor-pointer [&_.li-hashtag]:hover:underline
+                  [&_.li-link]:text-info [&_.li-link]:hover:underline
                   [&_b]:font-bold [&_strong]:font-bold
                   [&_i]:italic [&_em]:italic
                   [&_u]:underline
                   [&_s]:line-through [&_strike]:line-through [&_del]:line-through
                   [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:my-1
                   [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:my-1
-                  [&_li]:mb-0.5
+                  [&_li]:mb-0.5 [&_p]:mb-3 [&_a]:text-info
                   ${!expanded && isTruncated ? 'max-h-[96px] overflow-hidden' : ''}
                 `}
                 dangerouslySetInnerHTML={{ __html: previewHtml }}
               />
               {isTruncated && !expanded && (
-                <div className="absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-white to-transparent pointer-events-none" />
+                <div className="absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-surface to-transparent pointer-events-none" />
               )}
             </div>
             {isTruncated && (
               <button
                 onClick={() => setExpanded(!expanded)}
-                className="text-sm text-slate-500 hover:text-slate-700 font-medium mt-1 transition-colors relative z-10"
+                className="relative z-10 mt-1 text-sm font-medium text-muted transition-colors hover:text-ink"
               >
                 {expanded ? '...show less' : '...more'}
               </button>
@@ -138,22 +138,38 @@ const LinkedInPreview = ({ html, user, imageUrl, isGeneratingImage }) => {
       </div>
 
       {/* Image Preview */}
-      {isGeneratingImage && (
-        <div className="w-full aspect-[4/3] sm:aspect-[1.91/1] bg-slate-100 animate-pulse flex items-center justify-center border-y border-slate-100">
-           <div className="flex flex-col items-center gap-2 text-slate-400">
-               <Image className="w-8 h-8 animate-pulse" />
-               <span className="text-sm font-medium">Generating visual...</span>
-           </div>
-        </div>
-      )}
-      {!isGeneratingImage && imageUrl && (
-        <div className="w-full relative border-y border-slate-100 bg-slate-50">
-          <img src={imageUrl} alt="Generated visual content" className="w-full object-contain max-h-[500px]" />
-        </div>
-      )}
+      <AnimatePresence mode="wait" initial={false}>
+        {isGeneratingImage ? (
+          <motion.div
+            key="generating"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="relative flex aspect-[4/3] w-full items-center justify-center overflow-hidden border-y border-line bg-surface-2 sm:aspect-[1.91/1]"
+          >
+            <div className="skeleton absolute inset-0 !rounded-none opacity-70" />
+            <div className="absolute -left-10 top-0 h-full w-1/2 animate-blob rounded-full bg-accent/20 blur-2xl" />
+            <div className="relative flex flex-col items-center gap-2 text-ink-soft">
+              <Image className="h-8 w-8 animate-float" />
+              <span className="text-sm font-semibold">Painting your visual…</span>
+            </div>
+          </motion.div>
+        ) : imageUrl ? (
+          <motion.div
+            key={imageUrl}
+            initial={{ opacity: 0, scale: 1.04, filter: 'blur(8px)' }}
+            animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+            className="relative w-full overflow-hidden border-y border-line bg-surface-2"
+          >
+            <img src={imageUrl} alt="Generated visual content" className="max-h-[500px] w-full object-contain" />
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
 
       {/* Divider */}
-      <div className="mx-4 border-t border-slate-100 mt-2" />
+      <div className="mx-4 mt-2 border-t border-line" />
 
       {/* Action Row */}
       <div className="flex justify-around py-2 px-2">
@@ -165,9 +181,11 @@ const LinkedInPreview = ({ html, user, imageUrl, isGeneratingImage }) => {
         ].map(({ icon: Icon, label }) => (
           <button
             key={label}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-slate-500 hover:bg-slate-50 hover:text-slate-700 transition-colors text-sm font-medium"
+            type="button"
+            tabIndex={-1}
+            className="group/act flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-muted transition-colors hover:bg-surface-2 hover:text-ink"
           >
-            <Icon className="w-4 h-4" />
+            <Icon className="h-4 w-4 transition-transform duration-200 group-hover/act:-rotate-12 group-hover/act:scale-110" />
             <span className="hidden sm:inline">{label}</span>
           </button>
         ))}

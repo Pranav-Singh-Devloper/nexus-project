@@ -89,7 +89,7 @@ function restoreCursorPosition(containerEl, targetOffset) {
   }
 }
 
-const RichTextEditor = forwardRef(({ value, onContentChange }, ref) => {
+const RichTextEditor = forwardRef(({ value, onContentChange, readOnly = false }, ref) => {
   const editorRef = useRef(null);
   const cursorPosRef = useRef(null);
   const isInternalUpdate = useRef(false);
@@ -158,30 +158,32 @@ const RichTextEditor = forwardRef(({ value, onContentChange }, ref) => {
   }, [onContentChange]);
 
   return (
-    <div className="flex-1 relative">
+    <div className="relative flex-1">
       <div
         ref={editorRef}
-        contentEditable
+        contentEditable={!readOnly}
         suppressContentEditableWarning
         onInput={handleInput}
         onPaste={handlePaste}
         onKeyDown={handleKeyDown}
-        data-placeholder="Write your LinkedIn post..."
+        data-placeholder="What do you want to share today?"
         className="
-          min-h-[300px] max-h-[500px] overflow-y-auto
-          px-5 py-4 text-base text-slate-800 leading-relaxed
-          outline-none bg-white
+          min-h-[320px] max-h-[540px] overflow-y-auto
+          px-6 py-5 text-[16px] leading-[1.75] text-ink
+          outline-none bg-transparent caret-[var(--accent)]
           empty:before:content-[attr(data-placeholder)]
-          empty:before:text-slate-400 empty:before:pointer-events-none
-          [&_b]:font-bold [&_i]:italic [&_u]:underline [&_s]:line-through
-          [&_a]:text-[#0A66C2] [&_a]:underline
+          empty:before:text-muted empty:before:pointer-events-none
+          [&_b]:font-bold [&_strong]:font-bold [&_i]:italic [&_u]:underline [&_s]:line-through
+          [&_a]:text-accent-ink [&_a]:underline [&_a]:underline-offset-2
           [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:my-2
           [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:my-2
-          [&_li]:mb-1
+          [&_li]:mb-1 [&_li]:marker:text-accent
+          [&_p]:mb-3
         "
         role="textbox"
         aria-label="Post editor"
         aria-multiline="true"
+        aria-readonly={readOnly}
       />
     </div>
   );

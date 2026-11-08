@@ -1,49 +1,145 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import axios from 'axios';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
-  Plus, Layout, LogOut, Search, ChevronLeft, ChevronRight,
-  Loader, CheckCircle, XCircle, Clock, Trash2, Edit2, User, AlertTriangle, PenLine, Sparkles, Files
+  Plus, Search, ChevronLeft, ChevronRight, Trash2, ArrowUpDown, ArrowUpRight, Radar, Sparkles,
+  Maximize2, Rocket, FileText, Loader2,
 } from 'lucide-react';
 import { API_URL } from '../config';
+import { useCurrentUser } from '../lib/useCurrentUser';
+import { useToast } from '../lib/toast';
+import { useGeneratePost } from '../lib/useGeneratePost';
+import { isProcessing } from '../lib/research';
+import { ease, fadeUp, stagger } from '../lib/motion';
 import MarkdownReport from '../components/MarkdownReport';
+import NotesPanel from '../components/NotesPanel';
+import { StatusBadge, StatusOrb } from '../components/ResearchStatus';
+import { Button, Card, ConfirmDialog, EmptyState, Modal, PageHeader, Segmented, Skeleton } from '../components/ui';
+
+const FILTERS = [
+  { value: 'All', label: 'All' },
+  { value: 'Completed', label: 'Completed' },
+  { value: 'Initializing...', label: 'Processing' },
+  { value: 'Failed', label: 'Failed' },
+];
+
+const IDEAS = [
+  'Competitive landscape of AI note-taking apps',
+  'Pricing trends in B2B SaaS for 2026',
+  'How Gen Z discovers new fintech products',
+  'Market size for home EV chargers in India',
+];
+
+const greeting = () => {
+  const h = new Date().getHours();
+  return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+};
+
+// Cycles through what the AI is doing while a post is being written.
+const GENERATING_STEPS = ['Reading the report…', 'Finding the hook…', 'Writing your post…', 'Picking hashtags…'];
+const GeneratingLabel = () => {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setI(n => (n + 1) % GENERATING_STEPS.length), 1800);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <span className="relative inline-flex h-5 min-w-[150px] overflow-hidden">
+      <AnimatePresence mode="wait">
+        <motion.span key={i} initial={{ y: 14, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -14, opacity: 0 }} transition={{ duration: 0.3 }}>
+          {GENERATING_STEPS[i]}
+        </motion.span>
+      </AnimatePresence>
+    </span>
+  );
+};
+
+const ProjectCard = ({ project, onOpen, onDelete }) => {
+  const processing = isProcessing(project.status);
+  const viewable = !processing;
+  return (
+    <motion.div variants={fadeUp} layout>
+      <Card
+        hover={viewable}
+        className={`group relative overflow-hidden ${viewable ? 'cursor-pointer' : ''}`}
+        onClick={viewable ? () => onOpen(project) : undefined}
+      >
+        <div className="flex items-center gap-4 p-4 sm:p-5">
+          <StatusOrb status={project.status} />
+          <div className="min-w-0 flex-1">
+            <h3 className="truncate text-base font-semibold text-ink sm:text-[17px]" title={project.title}>{project.title}</h3>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2.5">
+              <StatusBadge status={project.status} />
+              <span className="text-xs font-medium text-muted">
+                {new Date(project.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+              </span>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            {viewable && (
+              <span className="hidden items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold text-ink-soft transition-all duration-300 group-hover:bg-surface-2 group-hover:text-ink sm:inline-flex">
+                {project.status === 'Failed' ? 'Details' : 'View report'}
+                <ArrowUpRight className="h-4 w-4 transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+              </span>
+            )}
+            <Button
+              variant="danger-ghost"
+              size="icon"
+              icon={Trash2}
+              aria-label="Delete research"
+              onClick={(e) => { e.stopPropagation(); onDelete(project); }}
+            />
+          </div>
+        </div>
+        {/* Indeterminate progress while the agent works */}
+        {processing && (
+          <div className="absolute inset-x-0 bottom-0 h-[3px] overflow-hidden bg-info/10">
+            <div className="h-full w-2/5 animate-scan rounded-full bg-gradient-to-r from-transparent via-info to-transparent" />
+          </div>
+        )}
+      </Card>
+    </motion.div>
+  );
+};
+
+const ListSkeleton = () => (
+  <div className="space-y-3">
+    {[0, 1, 2].map(i => (
+      <div key={i} className="card flex items-center gap-4 p-5" style={{ opacity: 1 - i * 0.25 }}>
+        <Skeleton className="h-12 w-12 !rounded-2xl" />
+        <div className="flex-1 space-y-2.5">
+          <Skeleton className="h-4 w-3/5" />
+          <Skeleton className="h-3 w-1/4" />
+        </div>
+      </div>
+    ))}
+  </div>
+);
 
 const Dashboard = () => {
-  const [user, setUser] = useState(null);
+  const user = useCurrentUser();
+  const toast = useToast();
   const [projects, setProjects] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  // UI States
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [newTitle, setNewTitle] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+  const [creating, setCreating] = useState(false);
 
-  // Project Details & Notes State
   const [selectedProject, setSelectedProject] = useState(null);
   const [projectNotes, setProjectNotes] = useState([]);
-  const [newNote, setNewNote] = useState("");
-  const [editingNoteId, setEditingNoteId] = useState(null);
-  const [editNoteText, setEditNoteText] = useState("");
+  const [toDelete, setToDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
-  // Generate Post States
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generateError, setGenerateError] = useState(null);
+  const { generate, generating, error: generateError } = useGeneratePost();
 
-  // Resume Feature States (Search, Sort, Filter, Pagination)
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const [sort, setSort] = useState("desc");
-  const [filterStatus, setFilterStatus] = useState("All");
-
-  // 1. Initial User Load
-  useEffect(() => {
-    axios.get(`${API_URL}/api/current_user`, { withCredentials: true })
-      .then(res => {
-        if (!res.data) window.location.href = '/';
-        setUser(res.data);
-      })
-      .catch(() => { window.location.href = '/'; });
-  }, []);
+  const [sort, setSort] = useState('desc');
+  const [filterStatus, setFilterStatus] = useState('All');
 
   // Wait until the user stops typing before searching (each search calls the AI engine)
   useEffect(() => {
@@ -54,438 +150,282 @@ const Dashboard = () => {
     return () => clearTimeout(t);
   }, [search]);
 
-  // 2. Fetch Projects List
   const fetchProjects = useCallback((isBackground = false) => {
     if (!isBackground) setLoading(true);
-
     const params = new URLSearchParams({ page, limit: 5, search: debouncedSearch, sort });
     if (filterStatus !== 'All') params.set('status', filterStatus);
 
-    axios.get(`${API_URL}/api/projects?${params}`, { withCredentials: true })
+    return axios.get(`${API_URL}/api/projects?${params}`, { withCredentials: true })
       .then(res => {
         setProjects(res.data.projects);
         setTotalPages(res.data.pagination.pages);
-        if (!isBackground) setLoading(false);
       })
-      .catch(err => {
-        console.error(err);
-        if (!isBackground) setLoading(false);
-      });
+      .catch(err => console.error(err))
+      .finally(() => { if (!isBackground) setLoading(false); });
   }, [page, debouncedSearch, sort, filterStatus]);
 
-  // 3. React to changes (Search/Filter/Sort/Page)
-  useEffect(() => {
-    fetchProjects();
-  }, [fetchProjects]);
+  useEffect(() => { fetchProjects(); }, [fetchProjects]);
 
-  // 4. Smart Polling (Auto-refresh if AI is processing)
+  // Refresh quietly while any agent is still working
   useEffect(() => {
-    const hasActiveMissions = projects.some(p => p.status === 'Initializing...');
-    if (hasActiveMissions) {
-      const interval = setInterval(() => { fetchProjects(true); }, 3000);
-      return () => clearInterval(interval);
-    }
+    if (!projects.some(p => isProcessing(p.status))) return;
+    const interval = setInterval(() => { fetchProjects(true); }, 3000);
+    return () => clearInterval(interval);
   }, [projects, fetchProjects]);
 
-  // 5. Fetch Single Project Details (Includes Notes)
-  const openProjectModal = async (project) => {
+  const openProject = async (project) => {
     setSelectedProject(project);
-    // Fetch fresh details including notes (READ Op #2)
+    setProjectNotes([]);
     try {
       const res = await axios.get(`${API_URL}/api/projects/${project.id}`, { withCredentials: true });
-      setSelectedProject(res.data); // fresh report + status
+      setSelectedProject(res.data);
       setProjectNotes(res.data.notes || []);
     } catch (err) {
-      console.error("Failed to fetch project details", err);
+      console.error('Failed to fetch project details', err);
     }
   };
 
-  // --- CRUD HANDLERS ---
-
-  // CREATE Project
   const handleCreate = async () => {
-    if (!newTitle.trim()) return;
-    setLoading(true);
+    if (!newTitle.trim() || creating) return;
+    setCreating(true);
     try {
       await axios.post(`${API_URL}/api/projects`, { title: newTitle }, { withCredentials: true });
-      setNewTitle("");
+      setNewTitle('');
       setIsModalOpen(false);
-      if (page === 1) fetchProjects(); else setPage(1); // page change triggers a fetch
-    } catch { alert("Failed to create mission"); setLoading(false); }
-  };
-
-  // DELETE Project
-  const handleDeleteProject = async (e, id) => {
-    e.stopPropagation();
-    if (!window.confirm("Delete this mission?")) return;
-    try {
-      await axios.delete(`${API_URL}/api/projects/${id}`, { withCredentials: true });
-      fetchProjects();
-    } catch { alert("Failed to delete"); }
-  };
-
-  // --- NOTES HANDLERS (2nd Entity CRUD) ---
-
-  // CREATE Note
-  const handleAddNote = async () => {
-    if (!newNote.trim() || !selectedProject) return;
-    try {
-      const res = await axios.post(`${API_URL}/api/notes`, {
-        content: newNote,
-        projectId: selectedProject.id
-      }, { withCredentials: true });
-
-      setProjectNotes([...projectNotes, res.data]); // Update UI instantly
-      setNewNote("");
-    } catch { alert("Failed to add note"); }
-  };
-
-  // DELETE Note
-  const handleDeleteNote = async (noteId) => {
-    if (!window.confirm("Delete note?")) return;
-    try {
-      await axios.delete(`${API_URL}/api/notes/${noteId}`, { withCredentials: true });
-      setProjectNotes(projectNotes.filter(n => n.id !== noteId));
-    } catch { alert("Failed to delete note"); }
-  };
-
-  // START EDITING Note
-  const startEditing = (note) => {
-    setEditingNoteId(note.id);
-    setEditNoteText(note.content);
-  };
-
-  // UPDATE Note
-  const handleUpdateNote = async (noteId) => {
-    try {
-      const res = await axios.put(`${API_URL}/api/notes/${noteId}`, {
-        content: editNoteText
-      }, { withCredentials: true });
-
-      // Update UI
-      setProjectNotes(projectNotes.map(n => n.id === noteId ? res.data : n));
-      setEditingNoteId(null);
-    } catch { alert("Failed to update note"); }
-  };
-
-  // GENERATE LINKEDIN POST from research report
-  const handleGeneratePost = async () => {
-    if (isGenerating || !selectedProject?.report) return;
-
-    setIsGenerating(true);
-    setGenerateError(null);
-
-    try {
-      const res = await axios.post(
-        `${API_URL}/api/generate-linkedin-post`,
-        { content: selectedProject.report },
-        { withCredentials: true }
-      );
-
-      const tags = (res.data.hashtags || []).filter(Boolean);
-      const html = tags.length ? `${res.data.post_html}<p>${tags.join(' ')}</p>` : res.data.post_html;
-
-      // Save it as a draft (linked to this research) and open it in the composer
-      const draft = await axios.post(`${API_URL}/api/drafts`, {
-        html,
-        hashtags: tags,
-        imagePrompt: res.data.image_prompt || null,
-        imageStyle: res.data.image_style || 'square',
-        projectId: selectedProject.id,
-      }, { withCredentials: true });
-      window.location.href = `/compose?draft=${draft.data.id}&autoImage=1`;
-    } catch (err) {
-      const message = err.response?.data?.error || 'Failed to generate post. Try again.';
-      setGenerateError(message);
+      setFilterStatus('All');
+      if (page === 1) fetchProjects(); else setPage(1);
+      toast.success('Agent launched. Your report will appear here when it is ready.');
+    } catch {
+      toast.error('Failed to launch the research agent.');
     } finally {
-      setIsGenerating(false);
+      setCreating(false);
     }
   };
 
-  // 6. Helper: Render Status Badge
-  const renderStatus = (status) => {
-    if (status === 'Completed') return (
-      <span className="text-emerald-600 flex items-center gap-1.5 text-xs font-medium bg-emerald-50 px-2 py-1 rounded-full border border-emerald-100">
-        <CheckCircle className="w-3.5 h-3.5" /> Completed
-      </span>
-    );
-
-    // --- NEW CASE: DEMO MODE ---
-    if (status === 'Demo Mode') return (
-      <span className="text-amber-600 flex items-center gap-1.5 text-xs font-medium bg-amber-50 px-2 py-1 rounded-full border border-amber-100">
-        <AlertTriangle className="w-3.5 h-3.5" /> Demo Mode - Rate Limit Hit
-      </span>
-    );
-    // ---------------------------
-
-    if (status === 'Failed') return (
-      <span className="text-red-600 flex items-center gap-1.5 text-xs font-medium bg-red-50 px-2 py-1 rounded-full border border-red-100">
-        <XCircle className="w-3.5 h-3.5" /> Failed
-      </span>
-    );
-
-    return (
-      <span className="text-blue-600 flex items-center gap-1.5 text-xs font-medium bg-blue-50 px-2 py-1 rounded-full border border-blue-100 animate-pulse">
-        <Clock className="w-3.5 h-3.5" /> {status}
-      </span>
-    );
+  const handleDelete = async () => {
+    if (!toDelete) return;
+    setDeleting(true);
+    try {
+      await axios.delete(`${API_URL}/api/projects/${toDelete.id}`, { withCredentials: true });
+      setProjects(list => list.filter(p => p.id !== toDelete.id));
+      setToDelete(null);
+      fetchProjects(true);
+    } catch {
+      toast.error('Failed to delete.');
+    } finally {
+      setDeleting(false);
+    }
   };
 
-  if (!user) return <div className="p-10 text-center">Loading...</div>;
+  const firstName = user?.name?.split(' ')[0];
+  const searching = search.trim() !== debouncedSearch;
 
   return (
-    <div className="min-h-screen bg-slate-50 relative">
-      {/* Navbar */}
-      <nav className="bg-white px-6 py-4 shadow-sm flex justify-between items-center sticky top-0 z-10">
-        <h1 className="text-xl font-bold flex items-center gap-2">
-          <Layout className="w-6 h-6" /> Nexus
-        </h1>
-        <div className="flex items-center gap-4">
-          {/* Compose Link */}
-          <a href="/compose" className="flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-black px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
-            <PenLine className="w-4 h-4" /> Compose
-          </a>
-          <a href="/posts" className="flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-black px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
-            <Files className="w-4 h-4" /> Posts
-          </a>
-          {/* Profile Link */}
-          <a href="/profile" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-            <img src={user.avatar} alt="User" className="w-8 h-8 rounded-full border" />
-            <span className="text-sm font-medium hidden sm:block">{user.name}</span>
-          </a>
-          <a href={`${API_URL}/api/logout`} className="text-slate-500 hover:text-red-500" title="Logout">
-            <LogOut className="w-5 h-5" />
-          </a>
+    <div className="mx-auto max-w-5xl px-4 pt-8 sm:px-6 sm:pt-12">
+      <PageHeader
+        eyebrow="Mission control"
+        title={firstName ? `${greeting()}, ${firstName}` : greeting()}
+        description="Launch research agents, read their reports, and turn the best insights into posts."
+        actions={<Button variant="accent" size="lg" icon={Plus} onClick={() => setIsModalOpen(true)}>New research</Button>}
+      />
+
+      {/* Search, filter, sort */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.15, ease }}
+        className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-center"
+      >
+        <div className="group relative flex-1">
+          <Search className="pointer-events-none absolute left-4 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-muted transition-colors group-focus-within:text-accent-ink" />
+          <input
+            type="text"
+            placeholder="Search your research…"
+            className="field h-12 !rounded-2xl !pl-11 !pr-10"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          {searching && <Loader2 className="absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted" />}
         </div>
-      </nav>
-
-      <main className="max-w-4xl mx-auto mt-10 p-6">
-        {/* Header & Search */}
-        <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
-          <h2 className="text-2xl font-bold text-slate-800">Mission Control</h2>
-
-          <div className="flex gap-4 w-full md:w-auto">
-            <div className="relative w-full">
-              <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Search missions..."
-                className="pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-black w-full"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </div>
-            <button
-              onClick={() => setIsModalOpen(true)}
-              className="flex items-center gap-2 bg-black text-white px-4 py-2 rounded-lg hover:bg-slate-800 transition whitespace-nowrap"
-            >
-              <Plus className="w-4 h-4" /> New Mission
-            </button>
-          </div>
+        <div className="flex items-center gap-2">
+          <Segmented
+            options={FILTERS}
+            value={filterStatus}
+            onChange={(v) => { setFilterStatus(v); setPage(1); }}
+            size="sm"
+            className="flex-1 lg:flex-none"
+          />
+          <Button
+            variant="outline"
+            size="md"
+            className="!h-11 shrink-0 !rounded-2xl"
+            onClick={() => setSort(s => (s === 'desc' ? 'asc' : 'desc'))}
+            title="Change sort order"
+          >
+            <motion.span animate={{ rotate: sort === 'desc' ? 0 : 180 }} transition={{ duration: 0.35, ease }}>
+              <ArrowUpDown className="h-4 w-4" />
+            </motion.span>
+            <span className="hidden sm:inline">{sort === 'desc' ? 'Newest' : 'Oldest'}</span>
+          </Button>
         </div>
+      </motion.div>
 
-        {/* Sort & Filter */}
-        <div className="flex gap-4 mb-6">
-          <select className="p-2 border rounded-lg bg-white text-sm" value={sort} onChange={(e) => setSort(e.target.value)}>
-            <option value="desc">Newest First</option>
-            <option value="asc">Oldest First</option>
-          </select>
-          <select className="p-2 border rounded-lg bg-white text-sm" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
-            <option value="All">All Status</option>
-            <option value="Completed">Completed</option>
-            <option value="Initializing...">Processing</option>
-            <option value="Failed">Failed</option>
-          </select>
-        </div>
-
-        {/* Project List */}
-        {loading ? (
-          <div className="text-center py-10"><Loader className="animate-spin mx-auto text-slate-400" /></div>
-        ) : projects.length === 0 ? (
-          <div className="text-center py-20 bg-white rounded-xl border border-dashed text-slate-400">
-            No missions found.
-          </div>
+      {/* List */}
+      {loading ? (
+        <ListSkeleton />
+      ) : projects.length === 0 ? (
+        debouncedSearch || filterStatus !== 'All' ? (
+          <EmptyState icon={Search} title="Nothing matches">
+            Try a different search or filter.
+          </EmptyState>
         ) : (
-          <div className="space-y-4">
-            {projects.map((p) => (
-              <div key={p.id} className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 hover:shadow-md transition-shadow duration-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4 group">
-                <div className="flex-1 min-w-0">
-                  <h3 className="font-semibold text-slate-900 text-lg truncate" title={p.title}>{p.title}</h3>
-                  <div className="mt-2 flex flex-wrap items-center gap-3">
-                    {renderStatus(p.status)}
-                    <span className="text-xs text-slate-400 font-mono">
-                      {new Date(p.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
-                    </span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 self-end sm:self-center">
-                  {p.status === 'Completed' ? (
-                    <button
-                      onClick={() => openProjectModal(p)}
-                      className="text-sm font-medium text-slate-700 bg-white border border-slate-300 px-4 py-2 rounded-lg hover:bg-slate-50 hover:text-black transition-colors shadow-sm"
-                    >
-                      View Report
-                    </button>
-                  ) : (
-                    <button disabled className="text-sm font-medium text-slate-400 bg-slate-50 border border-slate-100 px-4 py-2 rounded-lg cursor-not-allowed select-none">Processing...</button>
-                  )}
-                  <button onClick={(e) => handleDeleteProject(e, p.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete Mission">
-                    <Trash2 className="w-5 h-5" />
-                  </button>
-                </div>
-              </div>
+          <EmptyState
+            icon={Radar}
+            title="No research yet"
+            action={<Button variant="accent" icon={Rocket} onClick={() => setIsModalOpen(true)}>Launch your first agent</Button>}
+          >
+            Give an agent a market question. It searches the web and writes a full report for you.
+          </EmptyState>
+        )
+      ) : (
+        <motion.div
+          key={`${page}-${filterStatus}-${sort}-${debouncedSearch}`}
+          initial="hidden"
+          animate="show"
+          variants={stagger(0.06)}
+          className="space-y-3"
+        >
+          {projects.map(p => (
+            <ProjectCard key={p.id} project={p} onOpen={openProject} onDelete={setToDelete} />
+          ))}
+        </motion.div>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="mt-8 flex items-center justify-center gap-3">
+          <Button variant="outline" size="icon" icon={ChevronLeft} disabled={page <= 1} onClick={() => setPage(p => p - 1)} aria-label="Previous page" />
+          <div className="flex items-center gap-1.5">
+            {Array.from({ length: totalPages }, (_, i) => i + 1).slice(Math.max(0, page - 3), page + 2).map(n => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => setPage(n)}
+                className={`relative h-9 min-w-9 rounded-xl px-2 text-sm font-semibold transition-colors ${n === page ? 'text-on-primary' : 'text-muted hover:bg-surface-2 hover:text-ink'}`}
+              >
+                {n === page && <motion.span layoutId="page-pill" className="absolute inset-0 rounded-xl bg-primary" />}
+                <span className="relative">{n}</span>
+              </button>
             ))}
           </div>
-        )}
-
-        {/* Pagination */}
-        <div className="flex justify-center items-center gap-4 mt-8">
-          <button disabled={page <= 1} onClick={() => setPage(p => p - 1)} className="p-2 border rounded hover:bg-slate-100 disabled:opacity-50"><ChevronLeft className="w-4 h-4" /></button>
-          <span className="text-sm text-slate-600">Page {page} of {totalPages || 1}</span>
-          <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} className="p-2 border rounded hover:bg-slate-100 disabled:opacity-50"><ChevronRight className="w-4 h-4" /></button>
-        </div>
-      </main>
-
-      {/* New Mission Modal */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white p-6 rounded-xl w-full max-w-md shadow-2xl">
-            <h3 className="text-xl font-bold mb-4">Initialize New Agent</h3>
-            <textarea className="w-full border p-3 rounded-lg mb-4 focus:ring-2 focus:ring-black outline-none" rows="3" placeholder="e.g., Analyze the competitive landscape..." value={newTitle} onChange={(e) => setNewTitle(e.target.value)} />
-            <div className="flex justify-end gap-3">
-              <button onClick={() => setIsModalOpen(false)} className="text-slate-500 hover:text-black">Cancel</button>
-              <button onClick={handleCreate} className="bg-black text-white px-6 py-2 rounded-lg hover:bg-slate-800">Launch</button>
-            </div>
-          </div>
+          <Button variant="outline" size="icon" icon={ChevronRight} disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} aria-label="Next page" />
         </div>
       )}
 
-      {/* View Report & Notes Modal */}
-      {selectedProject && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl overflow-hidden">
-            {/* Modal Header */}
-            <div className="p-6 border-b flex justify-between items-center bg-white sticky top-0">
-              <h3 className="text-xl font-bold truncate pr-4">{selectedProject.title}</h3>
-              <div className="flex items-center gap-2">
-                <a href={`/projects/${selectedProject.id}`} className="text-xs text-blue-600 hover:underline mr-4">Full Page View</a>
-                <button onClick={() => setSelectedProject(null)} className="text-slate-500 hover:text-black">
-                  <XCircle className="w-6 h-6" />
-                </button>
-              </div>
-            </div>
+      {/* New research */}
+      <Modal
+        open={isModalOpen}
+        onClose={() => !creating && setIsModalOpen(false)}
+        title="Launch a research agent"
+        description="Describe what you want to know. The agent researches the web and writes a cited report."
+        footer={(
+          <>
+            <span className="mr-auto hidden text-xs text-muted sm:block">⌘ + Enter to launch</span>
+            <Button variant="ghost" onClick={() => setIsModalOpen(false)} disabled={creating}>Cancel</Button>
+            <Button variant="accent" icon={Rocket} onClick={handleCreate} loading={creating} disabled={!newTitle.trim()}>Launch</Button>
+          </>
+        )}
+      >
+        <textarea
+          className="field resize-none"
+          rows="4"
+          autoFocus
+          placeholder="e.g. Analyze the competitive landscape of…"
+          value={newTitle}
+          onChange={(e) => setNewTitle(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleCreate(); }}
+        />
+        <p className="mb-2 mt-5 text-[11px] font-bold uppercase tracking-[0.14em] text-muted">Need an idea?</p>
+        <div className="flex flex-wrap gap-2">
+          {IDEAS.map((idea, i) => (
+            <motion.button
+              key={idea}
+              type="button"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 + i * 0.05 }}
+              whileHover={{ y: -2 }}
+              whileTap={{ scale: 0.97 }}
+              onClick={() => setNewTitle(idea)}
+              className="rounded-full border border-line bg-surface-2/60 px-3 py-1.5 text-xs font-medium text-ink-soft transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-ink"
+            >
+              {idea}
+            </motion.button>
+          ))}
+        </div>
+      </Modal>
 
-            {/* Modal Body - Grid Layout */}
-            <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
-
-              {/* Left Column: AI Report */}
-              <div className="flex-1 p-6 overflow-y-auto border-r border-slate-100 bg-slate-50">
-                <h4 className="font-semibold text-slate-700 mb-4 flex items-center gap-2">
-                  <Layout className="w-4 h-4" /> AI Research Report
-                </h4>
-                <MarkdownReport
-                  content={selectedProject.report}
-                  fallback="No content generated."
-                  className="prose-sm"
-                />
-
-                {/* Generate Post Button */}
-                {selectedProject.report && (
-                  <div className="mt-6 pt-4 border-t border-slate-200">
-                    <button
-                      onClick={handleGeneratePost}
-                      disabled={isGenerating}
-                      className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:from-blue-700 hover:to-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed transition-all shadow-sm"
-                    >
-                      {isGenerating ? (
-                        <>
-                          <Loader className="w-4 h-4 animate-spin" />
-                          Generating draft...
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="w-4 h-4" />
-                          Generate LinkedIn Post
-                        </>
-                      )}
-                    </button>
-
-                    {generateError && (
-                      <p className="mt-3 text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg border border-red-100">
-                        {generateError}
-                      </p>
-                    )}
-                  </div>
+      {/* Report + notes */}
+      <Modal
+        open={!!selectedProject}
+        onClose={() => !generating && setSelectedProject(null)}
+        size="xl"
+        title={selectedProject?.title}
+        description={selectedProject && <span className="inline-flex items-center gap-2"><StatusBadge status={selectedProject.status} /></span>}
+        bodyClassName="flex min-h-0 flex-col overflow-y-auto md:flex-row md:overflow-hidden"
+        className="sm:h-[88vh]"
+      >
+        {selectedProject && (
+          <>
+            <div className="relative flex min-h-0 flex-1 flex-col md:overflow-hidden">
+              <div className="flex-1 px-6 py-6 sm:px-8 md:overflow-y-auto">
+                <div className="mb-5 flex items-center justify-between gap-3">
+                  <p className="flex items-center gap-2 text-sm font-bold text-ink"><FileText className="h-4 w-4 text-accent-ink" /> AI research report</p>
+                  <Link to={`/projects/${selectedProject.id}`} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold text-muted transition-colors hover:bg-surface-2 hover:text-ink">
+                    <Maximize2 className="h-3.5 w-3.5" /> Full page
+                  </Link>
+                </div>
+                {selectedProject.report === undefined ? (
+                  <div className="space-y-3"><Skeleton className="h-6 w-1/2" /><Skeleton className="h-4" /><Skeleton className="h-4 w-11/12" /><Skeleton className="h-4 w-4/5" /></div>
+                ) : (
+                  <MarkdownReport content={selectedProject.report} fallback="No content generated." className="prose-sm" />
                 )}
               </div>
 
-              {/* Right Column: Notes (CRUD Feature) */}
-              <div className="w-full md:w-80 bg-white p-6 flex flex-col border-l">
-                <h4 className="font-semibold text-slate-700 mb-4 flex items-center gap-2">
-                  <Edit2 className="w-4 h-4" /> Analyst Notes
-                </h4>
-
-                {/* Note List */}
-                <div className="flex-1 overflow-y-auto mb-4 space-y-3">
-                  {projectNotes.length === 0 ? (
-                    <p className="text-sm text-slate-400 italic">No notes yet.</p>
-                  ) : (
-                    projectNotes.map(note => (
-                      <div key={note.id} className="bg-slate-50 p-3 rounded-lg border border-slate-100 text-sm group relative hover:border-blue-200 transition-colors">
-
-                        {/* Edit Mode Check */}
-                        {editingNoteId === note.id ? (
-                          <div className="flex flex-col gap-2">
-                            <textarea
-                              className="w-full border p-2 rounded bg-white"
-                              rows="2"
-                              value={editNoteText}
-                              onChange={(e) => setEditNoteText(e.target.value)}
-                            />
-                            <div className="flex justify-end gap-2">
-                              <button onClick={() => setEditingNoteId(null)} className="text-xs text-slate-500">Cancel</button>
-                              <button onClick={() => handleUpdateNote(note.id)} className="text-xs bg-blue-600 text-white px-2 py-1 rounded">Save</button>
-                            </div>
-                          </div>
-                        ) : (
-                          <>
-                            <p className="text-slate-700 pr-6 break-words">{note.content}</p>
-                            <span className="text-[10px] text-slate-400 block mt-1">{new Date(note.createdAt).toLocaleDateString()}</span>
-
-                            {/* Actions */}
-                            <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button onClick={() => startEditing(note)} className="text-slate-400 hover:text-blue-600"><Edit2 className="w-3 h-3" /></button>
-                              <button onClick={() => handleDeleteNote(note.id)} className="text-slate-400 hover:text-red-600"><Trash2 className="w-3 h-3" /></button>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    ))
+              {selectedProject.report && selectedProject.status !== 'Failed' && (
+                <div className="border-t border-line bg-surface-2/50 px-6 py-4 sm:px-8">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-ink">Turn this into a LinkedIn post</p>
+                      <p className="text-xs text-muted">We'll write a draft with a hook, hashtags and an image.</p>
+                    </div>
+                    <Button variant="accent" icon={generating ? undefined : Sparkles} loading={generating} onClick={() => generate(selectedProject)}>
+                      {generating ? <GeneratingLabel /> : 'Generate post'}
+                    </Button>
+                  </div>
+                  {generateError && (
+                    <p className="mt-3 rounded-xl border border-danger/25 bg-danger/10 px-3 py-2 text-sm text-danger">{generateError}</p>
                   )}
                 </div>
-
-                {/* Add Note Input */}
-                <div className="mt-auto pt-4 border-t">
-                  <textarea
-                    className="w-full border p-2 rounded-lg text-sm focus:ring-2 focus:ring-black outline-none resize-none bg-slate-50 focus:bg-white transition-colors"
-                    rows="2"
-                    placeholder="Add a finding..."
-                    value={newNote}
-                    onChange={(e) => setNewNote(e.target.value)}
-                  />
-                  <button
-                    onClick={handleAddNote}
-                    disabled={!newNote.trim()}
-                    className="w-full mt-2 bg-black text-white py-2 rounded-lg text-sm font-medium hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                  >
-                    Add Note
-                  </button>
-                </div>
-              </div>
+              )}
             </div>
-          </div>
-        </div>
-      )}
+
+            <aside className="flex min-h-[420px] w-full flex-col border-t border-line bg-surface-2/40 p-6 md:min-h-0 md:w-[340px] md:border-l md:border-t-0">
+              <NotesPanel projectId={selectedProject.id} notes={projectNotes} setNotes={setProjectNotes} className="flex-1" />
+            </aside>
+          </>
+        )}
+      </Modal>
+
+      <ConfirmDialog
+        open={!!toDelete}
+        onClose={() => setToDelete(null)}
+        onConfirm={handleDelete}
+        busy={deleting}
+        title="Delete this research?"
+      >
+        “{toDelete?.title}” and its notes will be removed. This can't be undone.
+      </ConfirmDialog>
     </div>
   );
 };
