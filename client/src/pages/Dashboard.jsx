@@ -5,6 +5,7 @@ import {
   Loader, CheckCircle, XCircle, Clock, Trash2, Edit2, User, AlertTriangle, PenLine, Sparkles
 } from 'lucide-react';
 import { API_URL } from '../config';
+import MarkdownReport from '../components/MarkdownReport';
 
 const Dashboard = () => {
   const [user, setUser] = useState(null);
@@ -378,9 +379,11 @@ const Dashboard = () => {
                 <h4 className="font-semibold text-slate-700 mb-4 flex items-center gap-2">
                   <Layout className="w-4 h-4" /> AI Research Report
                 </h4>
-                <div className="prose prose-sm max-w-none text-slate-800 leading-relaxed whitespace-pre-wrap font-sans">
-                  {selectedProject.report || "No content generated."}
-                </div>
+                <MarkdownReport
+                  content={selectedProject.report}
+                  fallback="No content generated."
+                  className="prose-sm"
+                />
 
                 {/* Generate Post Button */}
                 {selectedProject.report && (

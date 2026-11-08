@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import axios from 'axios';
 import { Layout, ArrowLeft, Edit2, Trash2 } from 'lucide-react';
 import { API_URL } from '../config';
+import MarkdownReport from '../components/MarkdownReport';
 
 const ProjectDetails = () => {
   const { id } = useParams();
@@ -51,9 +52,7 @@ const ProjectDetails = () => {
         {/* Report Section */}
         <div className="md:col-span-2 bg-white p-8 rounded-xl shadow-sm">
           <h2 className="text-lg font-bold mb-4">Research Report</h2>
-          <div className="prose max-w-none text-slate-800 whitespace-pre-wrap">
-            {project.report || "No report generated."}
-          </div>
+          <MarkdownReport content={project.report} />
         </div>
 
         {/* Notes Section */}
