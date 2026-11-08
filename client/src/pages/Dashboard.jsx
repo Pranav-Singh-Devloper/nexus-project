@@ -141,7 +141,12 @@ const Dashboard = () => {
   const [sort, setSort] = useState('desc');
   const [filterStatus, setFilterStatus] = useState('All');
 
-  // Wait until the user stops typing before searching (each search calls the AI engine)
+  // Nudge the AI engine awake (free hosting sleeps it) so it's ready when needed
+  useEffect(() => {
+    axios.post(`${API_URL}/api/warmup`, {}, { withCredentials: true }).catch(() => {});
+  }, []);
+
+  // Wait until the user stops typing before searching
   useEffect(() => {
     const t = setTimeout(() => {
       setDebouncedSearch(search.trim());

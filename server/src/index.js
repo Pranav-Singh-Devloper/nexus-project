@@ -276,6 +276,28 @@ app.use('/auth', authRoutes);
 app.use('/api/social', socialRoutes);
 app.use('/api/drafts', draftRoutes);
 
+// --- Free-hosting helpers -------------------------------------------------
+// Render's free plan sleeps the server after 15 idle minutes, so the in-process
+// scheduler below can't be relied on alone. An external cron calls this to wake
+// the server and publish anything that's due.
+app.post('/internal/run-scheduler', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || req.get('x-cron-secret') !== secret) return res.status(401).json({ error: 'Unauthorized' });
+  await processScheduledPosts();
+  res.json({ ok: true, ranAt: new Date().toISOString() });
+});
+
+app.get('/healthz', (req, res) => res.json({ ok: true }));
+
+// The AI engine also sleeps when idle. Opening the dashboard nudges it awake
+// so it's ready by the time the user starts research or generates a post.
+app.post('/api/warmup', (req, res) => {
+  if (process.env.AI_SERVICE_URL) {
+    axios.get(`${process.env.AI_SERVICE_URL}/health`, { timeout: 60000 }).catch(() => {});
+  }
+  res.json({ ok: true });
+});
+
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT} (JWT Mode)`);

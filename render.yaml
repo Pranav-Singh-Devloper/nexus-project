@@ -1,0 +1,49 @@
+# Render Blueprint for the Nexus backend (free plan).
+# Frontend: Vercel. AI engine: Railway (free plan, sleeps when idle).
+# Secrets are marked `sync: false`: Render asks for them when the Blueprint is created.
+services:
+  - type: web
+    name: nexus-backend
+    runtime: node
+    plan: free
+    region: singapore        # same region as the Neon database
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm run start:prod   # prisma migrate deploy, then start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: CLIENT_URL
+        value: https://nexus-ai-swarm.vercel.app
+      - key: SERVER_URL          # this service's own https://….onrender.com URL
+        sync: false
+      - key: AI_SERVICE_URL      # the Railway AI engine URL
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: COOKIE_KEY          # keep the same value as before so users stay signed in
+        sync: false
+      - key: CRON_SECRET         # shared with the GitHub Actions scheduler
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: LINKEDIN_CLIENT_ID
+        sync: false
+      - key: LINKEDIN_CLIENT_SECRET
+        sync: false
+      - key: X_CLIENT_ID
+        sync: false
+      - key: X_CLIENT_SECRET
+        sync: false
+      - key: CF_ACCOUNT_ID       # optional: Cloudflare Workers AI embeddings
+        sync: false
+      - key: CF_API_TOKEN
+        sync: false

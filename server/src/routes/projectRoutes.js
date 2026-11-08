@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { PrismaClient } = require('@prisma/client');
 const axios = require('axios');
+const { embed, toPgVector } = require('../services/embeddings');
 const prisma = new PrismaClient();
 const jwt = require('jsonwebtoken');
 
@@ -61,17 +62,13 @@ router.get('/', requireAuth, async (req, res) => {
       // --- STRATEGY B: Hybrid Search (Raw SQL + Vectors) ---
       // Used when user types in search bar. Sorts by RELEVANCE (Similarity).
       
-      const aiServiceUrl = process.env.AI_SERVICE_URL;
       let vectorQuery = null;
 
       // 1. Convert Search Text -> Vector
       try {
-        if (aiServiceUrl) {
-          const vectorRes = await axios.post(`${aiServiceUrl}/create-vector`, { text: search }, { timeout: 15000 });
-          vectorQuery = vectorRes.data.vector;
-        }
+        vectorQuery = await embed(search);
       } catch (e) {
-        console.error("Vector generation failed, falling back to keyword only");
+        console.error("Vector generation failed, falling back to keyword only:", e.message);
       }
 
       // 2. Build Raw SQL
@@ -235,8 +232,7 @@ router.post('/', requireAuth, async (req, res) => {
         // 3. Generate + store embedding for semantic search (optional; search falls back to keywords)
         try {
           const embedText = `${title}: ${reportText.substring(0, 500)}`;
-          const vectorRes = await axios.post(`${aiServiceUrl}/create-vector`, { text: embedText }, { timeout: 30000 });
-          const vectorString = `[${vectorRes.data.vector.join(',')}]`;
+          const vectorString = toPgVector(await embed(embedText, { timeout: 30000 }));
           await prisma.$executeRaw`
             UPDATE "Project" SET embedding = ${vectorString}::vector WHERE id = ${project.id}
           `;

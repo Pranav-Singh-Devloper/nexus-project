@@ -13,3 +13,6 @@ server/src/generated/
 
 # Build output
 client/dist/
+
+# Embedding model cache (downloaded at build time)
+ai-engine/models/

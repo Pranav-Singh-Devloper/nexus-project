@@ -5,6 +5,8 @@ import operator
 import logging
 import asyncio
 import threading
+import resource
+import sys
 import httpx
 from typing import TypedDict, Annotated, List
 
@@ -37,6 +39,7 @@ app.add_middleware(
 
 # Groq retires models regularly; override with GROQ_MODEL instead of editing code.
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 
 # --- Global Tools & Embeddings (created lazily) ---
 # Created on first use so the server always starts, even if an API key is
@@ -58,7 +61,14 @@ def get_embeddings_model():
     if _embeddings_model is None:
         with _lock:
             if _embeddings_model is None:
-                _embeddings_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")  # 384-dim, matches vector(384)
+                # 384-dim, matches vector(384). One thread keeps memory low on free
+                # 512 MB hosts; the model is pre-downloaded at build time into
+                # FASTEMBED_CACHE so cold starts don't re-download it.
+                _embeddings_model = TextEmbedding(
+                    model_name=EMBED_MODEL,
+                    cache_dir=os.getenv("FASTEMBED_CACHE") or None,
+                    threads=int(os.getenv("EMBED_THREADS", "1")),
+                )
     return _embeddings_model
 
 # --- State Definition ---
@@ -69,30 +79,77 @@ class AgentState(TypedDict):
 
 # --- Agent Builder ---
 def build_research_agent(api_key: str):
+    def make_llm(temperature: float) -> ChatOpenAI:
+        return ChatOpenAI(
+            model=GROQ_MODEL,
+            openai_api_key=api_key,
+            openai_api_base="https://api.groq.com/openai/v1",
+            temperature=temperature,
+            # Room for the model's reasoning plus a full markdown report.
+            max_tokens=4096
+        )
+
     # Base LLM for fallbacks (no tools)
-    llm_base = ChatOpenAI(
-        model=GROQ_MODEL,
-        openai_api_key=api_key,
-        openai_api_base="https://api.groq.com/openai/v1",
-        temperature=0,
-        # Room for the model's reasoning plus a full markdown report.
-        max_tokens=4096
-    )
-    
-    # Tool-bound LLM
+    llm_base = make_llm(0)
+
+    # Tool-bound LLM. Retries use a little randomness: at temperature 0 the model
+    # tends to repeat the exact same malformed tool call.
     tavily_tool = get_tavily_tool()
-    llm_with_tools = llm_base.bind_tools([tavily_tool])
+    tool_llms = [make_llm(t).bind_tools([WEB_SEARCH_TOOL]) for t in (0, 0.4, 0.7)]
+
+    async def write_report_without_tools(state: AgentState):
+        """Writes the report from a fresh, tool-free prompt.
+
+        gpt-oss keeps trying to search when the conversation contains earlier
+        tool calls, and Groq rejects that when no tools are offered. So the final
+        write-up only sees the question and the gathered sources as plain text.
+        """
+        messages = state["messages"]
+        rules = "\n".join(
+            line for line in messages[0].content.splitlines() if "search" not in line.lower()
+        )
+        question = next((m.content for m in messages if isinstance(m, HumanMessage)), "")
+        sources = "\n\n".join(
+            m.content for m in messages
+            if isinstance(m, ToolMessage) and m.content and not m.content.startswith("No query given")
+        ) or "No web sources were found. Write from general knowledge and say so clearly."
+        prompt = [
+            SystemMessage(content=rules + "\nYou have no tools. Answer only with the report."),
+            HumanMessage(content=(
+                f"Research question: {question}\n\n"
+                f"Sources gathered from web searches:\n\n{sources}\n\n"
+                "Write the full report now."
+            )),
+        ]
+        last_error = None
+        for temperature in (0, 0.5):
+            try:
+                llm = llm_base if temperature == 0 else make_llm(temperature)
+                response = await llm.ainvoke(prompt)
+                if (response.content or "").strip():
+                    return response
+            except Exception as e:
+                if "429" in str(e):
+                    raise
+                last_error = e
+                logger.warning(f"⚠️ Report write-up attempt failed: {e}")
+        raise last_error or RuntimeError("Model returned an empty report")
 
     async def call_model(state: AgentState):
-        try:
-            response = await llm_with_tools.ainvoke(state["messages"])
-            return {"messages": [response]}
-        except Exception as e:
-            logger.warning(f"⚠️ LLM hallucinated tool or failed: {e}")
-            # Fallback to pure text generation
-            fallback_msg = SystemMessage(content="A tool error occurred. Provide a final summary based on existing data.")
-            response = await llm_base.ainvoke(state["messages"] + [fallback_msg])
-            return {"messages": [response], "tool_calls_count": 2}
+        last_error = None
+        for llm in tool_llms:
+            try:
+                response = await llm.ainvoke(state["messages"])
+                return {"messages": [response]}
+            except Exception as e:
+                if "429" in str(e):
+                    raise  # rate limit: let the caller rotate to the backup key
+                last_error = e
+                logger.warning(f"⚠️ Tool-call attempt failed, retrying: {e}")
+
+        # Fallback: write the report from what we have, without tools.
+        logger.warning(f"⚠️ Falling back to a no-tools report after: {last_error}")
+        return {"messages": [await write_report_without_tools(state)], "tool_calls_count": 2}
 
     async def call_tool(state: AgentState):
         if state.get("tool_calls_count", 0) >= 2:
@@ -102,18 +159,22 @@ def build_research_agent(api_key: str):
         tool_messages = []
 
         for tool_call in last_message.tool_calls:
-            # Catch models trying to pass 'cursor' or 'id' instead of 'query'
-            query = tool_call["args"].get("query")
+            # gpt-oss sometimes tries to "open" a result (passing 'id' or 'cursor')
+            # instead of searching. Every tool call still needs a reply.
+            query = (tool_call["args"] or {}).get("query")
             if not query:
-                continue 
-
-            try:
-                # Small delay to respect Groq rate limits
-                await asyncio.sleep(1)
-                result = await tavily_tool.ainvoke({"query": query})
-                trimmed_result = str(result)[:2000] # Prevent 413 errors
-            except Exception as e:
-                trimmed_result = f"Search Error: {str(e)}"
+                trimmed_result = (
+                    "No query given. The results above already include page text. "
+                    "To look something else up, call web_search with a new, specific 'query'."
+                )
+            else:
+                try:
+                    # Small delay to respect Groq rate limits
+                    await asyncio.sleep(1)
+                    result = await tavily_tool.ainvoke({"query": query})
+                    trimmed_result = format_search_results(result)
+                except Exception as e:
+                    trimmed_result = f"Search Error: {str(e)}"
 
             tool_messages.append(ToolMessage(
                 tool_call_id=tool_call["id"],
@@ -126,19 +187,62 @@ def build_research_agent(api_key: str):
             "tool_calls_count": state.get("tool_calls_count", 0) + 1
         }
 
+    async def finalize(state: AgentState):
+        """Writes the report when the search budget is spent or the model gave no text."""
+        return {"messages": [await write_report_without_tools(state)]}
+
     def should_continue(state: AgentState):
-        if state.get("tool_calls_count", 0) >= 2: return END
         last_message = state["messages"][-1]
-        return "tools" if last_message.tool_calls else END
+        wants_tools = bool(getattr(last_message, "tool_calls", None))
+        if wants_tools and state.get("tool_calls_count", 0) < 2:
+            return "tools"
+        if wants_tools or not (last_message.content or "").strip():
+            return "finalize"
+        return END
 
     workflow = StateGraph(AgentState)
     workflow.add_node("agent", call_model)
     workflow.add_node("tools", call_tool)
+    workflow.add_node("finalize", finalize)
     workflow.set_entry_point("agent")
-    workflow.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
+    workflow.add_conditional_edges("agent", should_continue, {"tools": "tools", "finalize": "finalize", END: END})
     workflow.add_edge("tools", "agent")
+    workflow.add_edge("finalize", END)
 
     return workflow.compile()
+
+# The tool the model sees. 'query' is deliberately optional and extra keys are
+# allowed: Groq rejects calls that don't match the schema before our code can
+# handle them, and gpt-oss occasionally sends browser-style args ('id', 'cursor').
+WEB_SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": (
+            "Search the live web for current facts, figures and sources. "
+            "Always pass a specific 'query'. Results include page text, so there is no need to open them."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "What to search for."}},
+            "required": [],
+            "additionalProperties": True,
+        },
+    },
+}
+
+
+def format_search_results(result, limit: int = 3500) -> str:
+    """Turns a Tavily response into compact numbered sources the model can cite."""
+    items = result.get("results", []) if isinstance(result, dict) else []
+    if not items:
+        return str(result)[:limit]
+    blocks = []
+    for i, r in enumerate(items, 1):
+        content = " ".join((r.get("content") or "").split())[:900]
+        blocks.append(f"[{i}] {r.get('title', '').strip()}\n{r.get('url', '')}\n{content}")
+    return "\n\n".join(blocks)[:limit]
+
 
 def clean_report(text: str) -> str:
     """Remove gpt-oss citation markers (e.g. 【0†content】) and stray code fences."""
@@ -205,7 +309,18 @@ def health():
         "model": GROQ_MODEL,
         "configured": {k: bool(os.getenv(k)) for k in keys},
         "embeddings_loaded": _embeddings_model is not None,
+        "memory_mb": _memory_mb(),
     }
+
+
+def _memory_mb():
+    """Current resident memory (Linux) or peak (macOS), to watch free-tier RAM limits."""
+    try:
+        with open("/proc/self/statm") as f:
+            return round(int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 2**20)
+    except OSError:
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return round(peak / (2**20 if sys.platform == "darwin" else 2**10))
 
 @app.post("/start-research")
 async def start_research(request: ResearchRequest):

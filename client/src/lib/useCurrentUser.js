@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { API_URL } from '../config';
+import { trackWake } from './serverWake';
 
 // One /api/current_user request per page load, shared by every page and the nav.
 let cachedUser = null;
@@ -8,7 +9,7 @@ let pending = null;
 
 export function fetchCurrentUser() {
   if (!pending) {
-    pending = axios.get(`${API_URL}/api/current_user`, { withCredentials: true })
+    pending = trackWake(axios.get(`${API_URL}/api/current_user`, { withCredentials: true }))
       .then(res => { cachedUser = res.data || null; return cachedUser; })
       .catch(err => { pending = null; throw err; });
   }

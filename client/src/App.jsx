@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { MotionConfig } from 'framer-motion';
 import ThemeProvider from './components/ThemeProvider';
 import Toaster from './components/Toaster';
+import WakeNotice from './components/WakeNotice';
 import AppLayout from './components/layout/AppLayout';
 import Auth from './pages/Auth';
 import Dashboard from './pages/Dashboard';
@@ -18,6 +19,7 @@ function App() {
       <MotionConfig reducedMotion="user">
         <BrowserRouter>
           <Toaster>
+            <WakeNotice />
             <Routes>
               <Route path="/" element={<Auth />} />
               <Route path="/policy" element={<Policy />} />

@@ -1,0 +1,30 @@
+# Wakes the backend (free hosting sleeps it) and publishes any scheduled posts that are due.
+# Every 30 minutes keeps it well inside Render's and Neon's free monthly allowances.
+name: scheduler
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Wake backend and run scheduler
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$BACKEND_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "BACKEND_URL / CRON_SECRET secrets not set; skipping."; exit 0
+          fi
+          # Cold starts can take up to a minute, so retry a few times.
+          for i in 1 2 3 4; do
+            code=$(curl -s -o /tmp/out -w '%{http_code}' -m 90 -X POST "$BACKEND_URL/internal/run-scheduler" -H "x-cron-secret: $CRON_SECRET")
+            echo "attempt $i: HTTP $code $(cat /tmp/out)"
+            [ "$code" = "200" ] && exit 0
+            sleep 15
+          done
+          exit 1
