@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { User, Mail, Award, Clock, Layout, Linkedin, Twitter } from 'lucide-react';
+import { Mail, Layout, Linkedin, Twitter, RefreshCw, Files } from 'lucide-react';
 import { API_URL } from '../config';
+import { connectionInfo, reconnectUrl, formatExpiry } from '../utils/connections';
 
 const Profile = () => {
   const [user, setUser] = useState(null);
@@ -49,6 +50,7 @@ const Profile = () => {
   
   const hasLinkedIn = user.socialAccounts?.some(acc => acc.provider === 'linkedin');
   const hasX = user.socialAccounts?.some(acc => acc.provider === 'x');
+  const linkedin = connectionInfo(user, 'linkedin');
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -58,6 +60,9 @@ const Profile = () => {
         </a>
         <span className="text-slate-300">/</span>
         <span className="font-bold text-black">Profile</span>
+        <a href="/posts" className="ml-auto flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-black">
+          <Files className="w-4 h-4" /> Posts
+        </a>
       </nav>
 
       <main className="max-w-3xl mx-auto mt-10 p-6">
@@ -79,12 +84,29 @@ const Profile = () => {
             </div>
             <div className="mt-6 border-t border-slate-100 pt-5 flex flex-wrap gap-4">
               {hasLinkedIn ? (
-                <div className="inline-flex items-center gap-2 bg-emerald-50 text-emerald-700 border border-emerald-200 px-5 py-2.5 rounded-lg text-sm font-medium">
-                  <Linkedin className="w-4 h-4" /> LinkedIn Connected
+                <div className={`inline-flex items-center gap-3 border px-4 py-2 rounded-lg text-sm ${
+                  linkedin.expired ? 'bg-red-50 text-red-700 border-red-200'
+                    : linkedin.expiringSoon ? 'bg-amber-50 text-amber-800 border-amber-200'
+                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                }`}>
+                  <Linkedin className="w-4 h-4" />
+                  <span>
+                    <span className="font-medium">{linkedin.expired ? 'LinkedIn expired' : 'LinkedIn connected'}</span>
+                    {!linkedin.expired && <span className="block text-xs opacity-80">{formatExpiry(linkedin)}</span>}
+                  </span>
+                  <a
+                    href={reconnectUrl('linkedin', '/profile')}
+                    className={`inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-md ${
+                      linkedin.expired || linkedin.expiringSoon ? 'bg-[#0A66C2] text-white hover:bg-[#004182]' : 'bg-white/70 hover:bg-white'
+                    }`}
+                    title="LinkedIn connections last 60 days. Reconnecting renews it."
+                  >
+                    <RefreshCw className="w-3 h-3" /> Reconnect
+                  </a>
                 </div>
               ) : (
                 <a 
-                  href={`${API_URL}/auth/linkedin`}
+                  href={reconnectUrl('linkedin', '/profile')}
                   className="inline-flex items-center gap-2 bg-[#0A66C2] text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-[#004182] shadow-sm transition-all hover:shadow-md"
                 >
                   <Linkedin className="w-4 h-4" /> Connect LinkedIn

@@ -9,6 +9,7 @@ import Auth from './pages/Auth';
 import TextFormatterPage from './pages/compose/TextFormatterPage';
 import Policy from './pages/Policy';
 import Service from './pages/Service';
+import Posts from './pages/Posts';
 
 // Login Component (Internal)
 const Login = () => (
@@ -35,6 +36,7 @@ function App() {
         <Route path="/profile" element={<Profile />} />
         <Route path="/projects/:id" element={<ProjectDetails />} />
         <Route path="/compose" element={<TextFormatterPage />} />
+        <Route path="/posts" element={<Posts />} />
         <Route path="/policy" element={<Policy />} />
         <Route path="/service" element={<Service />} />
       </Routes>

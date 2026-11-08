@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import {
   Plus, Layout, LogOut, Search, ChevronLeft, ChevronRight,
-  Loader, CheckCircle, XCircle, Clock, Trash2, Edit2, User, AlertTriangle, PenLine, Sparkles
+  Loader, CheckCircle, XCircle, Clock, Trash2, Edit2, User, AlertTriangle, PenLine, Sparkles, Files
 } from 'lucide-react';
 import { API_URL } from '../config';
 import MarkdownReport from '../components/MarkdownReport';
@@ -182,17 +182,18 @@ const Dashboard = () => {
         { withCredentials: true }
       );
 
-      localStorage.setItem('nexus_linkedin_data', JSON.stringify({
-        version: 1,
-        post_html: res.data.post_html,
-        image_prompt: res.data.image_prompt,
-        image_style: res.data.image_style,
-        image_alt: res.data.image_alt,
-        hashtags: res.data.hashtags,
-        image_url: null,
-        image_status: 'pending'
-      }));
-      window.location.href = '/compose';
+      const tags = (res.data.hashtags || []).filter(Boolean);
+      const html = tags.length ? `${res.data.post_html}<p>${tags.join(' ')}</p>` : res.data.post_html;
+
+      // Save it as a draft (linked to this research) and open it in the composer
+      const draft = await axios.post(`${API_URL}/api/drafts`, {
+        html,
+        hashtags: tags,
+        imagePrompt: res.data.image_prompt || null,
+        imageStyle: res.data.image_style || 'square',
+        projectId: selectedProject.id,
+      }, { withCredentials: true });
+      window.location.href = `/compose?draft=${draft.data.id}&autoImage=1`;
     } catch (err) {
       const message = err.response?.data?.error || 'Failed to generate post. Try again.';
       setGenerateError(message);
@@ -243,6 +244,9 @@ const Dashboard = () => {
           {/* Compose Link */}
           <a href="/compose" className="flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-black px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
             <PenLine className="w-4 h-4" /> Compose
+          </a>
+          <a href="/posts" className="flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-black px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
+            <Files className="w-4 h-4" /> Posts
           </a>
           {/* Profile Link */}
           <a href="/profile" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
