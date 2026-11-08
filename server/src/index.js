@@ -17,6 +17,8 @@ const authRoutes = require('./routes/authRoutes');
 const { router: socialRoutes, processScheduledPosts } = require('./routes/socialRoutes');
 const ProviderFactory = require('./services/social/ProviderFactory');
 const crypto = require('crypto');
+const { issueSession, renewSessionIfStale, clearSession } = require('./utils/session');
+const draftRoutes = require('./routes/draftRoutes');
 
 const app = express();
 const isProduction = process.env.NODE_ENV === 'production';
@@ -42,15 +44,6 @@ app.use(session({
 
 app.use(passport.initialize());
 
-// --- JWT Helper ---
-const generateToken = (user) => {
-    return jwt.sign(
-        { id: user.id, email: user.email }, 
-        process.env.COOKIE_KEY,
-        { expiresIn: '7d' }
-    );
-};
-
 // --- Routes ---
 
 // 1. Google Auth Start
@@ -64,15 +57,7 @@ app.get(
   '/auth/google/callback',
   passport.authenticate('google', { failureRedirect: `${process.env.CLIENT_URL}/?error=google_failed`, session: false }),
   (req, res) => {
-    const token = generateToken(req.user);
-    
-    res.cookie('token', token, {
-        httpOnly: true,
-        secure: isProduction,
-        sameSite: isProduction ? 'none' : 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000
-    });
-
+    issueSession(res, req.user);
     res.redirect(`${process.env.CLIENT_URL}/dashboard`);
   }
 );
@@ -80,6 +65,12 @@ app.get(
 // =============================================
 // Social Media Auth (OAuth2)
 // =============================================
+
+// Only allow returning to a path inside our own frontend (e.g. "/compose?draft=..").
+const safeReturnPath = (value) =>
+  typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') && !value.includes('\\')
+    ? value
+    : '/profile';
 
 // Step 1: Redirect user to authorization page
 app.get('/auth/:provider', (req, res) => {
@@ -101,6 +92,7 @@ app.get('/auth/:provider', (req, res) => {
     // Generate secure state
     const state = crypto.randomBytes(16).toString('hex');
     req.session[`${provider}_oauth_state`] = state;
+    req.session[`${provider}_return_to`] = safeReturnPath(req.query.returnTo);
 
     const authUrl = socialProvider.getAuthUrl(state, req.session);
     res.redirect(authUrl);
@@ -174,7 +166,10 @@ app.get('/auth/:provider/callback', async (req, res) => {
     });
 
     console.log(`[${provider}] Account linked successfully for user:`, userId);
-    res.redirect(`${process.env.CLIENT_URL}/profile?${provider}=success`);
+    const returnTo = req.session[`${provider}_return_to`] || '/profile';
+    delete req.session[`${provider}_return_to`];
+    const sep = returnTo.includes('?') ? '&' : '?';
+    res.redirect(`${process.env.CLIENT_URL}${returnTo}${sep}${provider}=success`);
 
   } catch (err) {
     console.error(`[${provider}] Token exchange error:`, err.response?.data || err.message);
@@ -189,6 +184,7 @@ app.get('/api/current_user', async (req, res) => {
 
     try {
         const decoded = jwt.verify(token, process.env.COOKIE_KEY);
+        renewSessionIfStale(res, decoded);
         // Never send the password hash or social OAuth tokens to the browser
         const user = await prisma.user.findUnique({
             where: { id: decoded.id },
@@ -205,11 +201,7 @@ app.get('/api/current_user', async (req, res) => {
 
 // 4. Logout (Clear Cookie)
 app.get('/api/logout', (req, res) => {
-    res.clearCookie('token', {
-        httpOnly: true,
-        secure: isProduction,
-        sameSite: isProduction ? 'none' : 'lax',
-    });
+    clearSession(res);
     res.redirect(process.env.CLIENT_URL);
 });
 
@@ -282,6 +274,7 @@ app.use('/api/projects', projectRoutes);
 app.use('/api/notes', noteRoutes);
 app.use('/auth', authRoutes);
 app.use('/api/social', socialRoutes);
+app.use('/api/drafts', draftRoutes);
 
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {

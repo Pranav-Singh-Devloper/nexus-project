@@ -1,25 +1,21 @@
 const express = require('express');
 const router = express.Router();
-const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const ProviderFactory = require('../services/social/ProviderFactory');
 
-// --- JWT Auth Middleware ---
-const requireAuth = (req, res, next) => {
-  const token = req.cookies?.token;
-  if (!token) {
-    return res.status(401).json({ error: 'Not authenticated', code: 'NO_TOKEN' });
-  }
+const { requireAuth } = require('../utils/session');
 
-  try {
-    const decoded = jwt.verify(token, process.env.COOKIE_KEY);
-    req.userId = decoded.id;
-    next();
-  } catch (err) {
-    return res.status(401).json({ error: 'Invalid token', code: 'INVALID_TOKEN' });
-  }
-};
+// Load a draft only if it belongs to this user (null when no draftId was sent).
+async function findUserDraft(draftId, userId) {
+  if (!draftId) return null;
+  return prisma.postDraft.findFirst({ where: { id: draftId, userId } });
+}
+
+// Keep the draft's status in step with what happened to the post.
+// updateMany so a draft deleted in the meantime doesn't throw.
+const updateDraft = (draftId, data) =>
+  draftId ? prisma.postDraft.updateMany({ where: { id: draftId }, data }) : Promise.resolve();
 
 /**
  * Check and refresh token if expired
@@ -30,6 +26,9 @@ async function ensureValidToken(account) {
   const expiryBuffer = new Date(now.getTime() + 5 * 60000);
 
   if (account.expiresAt && account.expiresAt < expiryBuffer) {
+    // LinkedIn only gives refresh tokens to approved partner apps, so most
+    // connections simply need the user to reconnect after 60 days.
+    if (!account.refreshToken) throw new Error('TOKEN_REFRESH_FAILED');
     console.log(`[SocialRoutes] Token expired or expiring soon for ${account.provider}. Refreshing...`);
     const providerInstance = ProviderFactory.getProvider(account.provider);
     
@@ -59,13 +58,20 @@ async function ensureValidToken(account) {
 // =============================================
 router.post('/:provider/post', requireAuth, async (req, res) => {
   const { provider } = req.params;
-  const { text, imageUrl } = req.body;
+  const { text, imageUrl, draftId } = req.body;
 
   if (!text || !text.trim()) {
     return res.status(400).json({ error: 'Post content is required' });
   }
 
   try {
+    const draft = await findUserDraft(draftId, req.userId);
+    if (draftId && !draft) return res.status(404).json({ error: 'Draft not found' });
+
+    const markPublished = (result) => updateDraft(draft?.id, {
+      status: 'published', provider, publishedAt: new Date(), postUrl: result.postUrl || null, error: null,
+    });
+
     let socialAccount = await prisma.socialAccount.findUnique({
       where: { userId_provider: { userId: req.userId, provider } }
     });
@@ -93,6 +99,7 @@ router.post('/:provider/post', requireAuth, async (req, res) => {
     // Call API with exactly 1 retry on 401
     try {
       const result = await providerInstance.post(socialAccount, formattedContent, imageUrl);
+      await markPublished(result);
       return res.json({ status: 'success', ...result });
     } catch (apiError) {
       // If 401, force refresh once and retry
@@ -104,6 +111,7 @@ router.post('/:provider/post', requireAuth, async (req, res) => {
           socialAccount = await ensureValidToken(socialAccount);
           
           const retryResult = await providerInstance.post(socialAccount, formattedContent, imageUrl);
+          await markPublished(retryResult);
           return res.json({ status: 'success', ...retryResult });
         } catch (retryError) {
           return res.status(401).json({ error: `${provider} token expired and refresh failed. Please reconnect.`, code: 'TOKEN_EXPIRED' });
@@ -133,7 +141,7 @@ router.post('/:provider/post', requireAuth, async (req, res) => {
 // =============================================
 router.post('/:provider/schedule', requireAuth, async (req, res) => {
   const { provider } = req.params;
-  const { text, scheduledAt, imageUrl } = req.body;
+  const { text, scheduledAt, imageUrl, draftId } = req.body;
 
   if (!text || !text.trim()) {
     return res.status(400).json({ error: 'Post content is required' });
@@ -158,6 +166,12 @@ router.post('/:provider/schedule', requireAuth, async (req, res) => {
     });
   }
 
+  const draft = await findUserDraft(draftId, req.userId);
+  if (draftId && !draft) return res.status(404).json({ error: 'Draft not found' });
+  if (draft && !['draft', 'failed'].includes(draft.status)) {
+    return res.status(409).json({ error: `This post is already ${draft.status}.` });
+  }
+
   try {
     const scheduledPost = await prisma.scheduledPost.create({
       data: {
@@ -166,14 +180,25 @@ router.post('/:provider/schedule', requireAuth, async (req, res) => {
         imageUrl: imageUrl || null,
         scheduledAt: scheduleDate,
         userId: req.userId,
-        status: 'pending'
+        status: 'pending',
+        draftId: draft?.id || null,
       }
     });
+
+    await updateDraft(draft?.id, { status: 'scheduled', provider, scheduledAt: scheduleDate, error: null });
+
+    // Warn if the connection will have expired by the time the post goes out.
+    let warning = null;
+    if (!socialAccount.refreshToken && socialAccount.expiresAt && socialAccount.expiresAt < scheduleDate) {
+      const name = provider === 'x' ? 'X' : 'LinkedIn';
+      warning = `Your ${name} connection expires on ${socialAccount.expiresAt.toDateString()}, before this post goes out. Reconnect ${name} before then or the post will fail.`;
+    }
 
     return res.status(201).json({
       status: 'scheduled',
       id: scheduledPost.id,
-      scheduledAt: scheduledPost.scheduledAt
+      scheduledAt: scheduledPost.scheduledAt,
+      warning,
     });
   } catch (err) {
     console.error('Schedule error:', err);
@@ -210,10 +235,9 @@ async function processScheduledPosts() {
       let socialAccount = post.user.socialAccounts.find(acc => acc.provider === post.provider);
 
       if (!socialAccount) {
-        await prisma.scheduledPost.update({
-          where: { id: post.id },
-          data: { status: 'failed', error: `${post.provider} account not connected` }
-        });
+        const error = `${post.provider === 'x' ? 'X' : 'LinkedIn'} account not connected`;
+        await prisma.scheduledPost.update({ where: { id: post.id }, data: { status: 'failed', error } });
+        await updateDraft(post.draftId, { status: 'failed', error });
         continue;
       }
 
@@ -240,6 +264,9 @@ async function processScheduledPosts() {
           where: { id: post.id },
           data: { status: 'published', providerPostId: result.providerPostId }
         });
+        await updateDraft(post.draftId, {
+          status: 'published', publishedAt: new Date(), postUrl: result.postUrl || null, error: null,
+        });
 
         console.log(`Published scheduled post ${post.id} -> ${result.providerPostId} on ${post.provider}`);
 
@@ -248,10 +275,9 @@ async function processScheduledPosts() {
         const errorMsg = apiError.response?.data?.message || apiError.message;
 
         if (status === 401 || apiError.message === 'TOKEN_REFRESH_FAILED') {
-          await prisma.scheduledPost.update({
-            where: { id: post.id },
-            data: { status: 'failed', error: 'Token expired. Please reconnect.' }
-          });
+          const error = `${post.provider === 'x' ? 'X' : 'LinkedIn'} connection expired. Reconnect and schedule again.`;
+          await prisma.scheduledPost.update({ where: { id: post.id }, data: { status: 'failed', error } });
+          await updateDraft(post.draftId, { status: 'failed', error });
           continue;
         }
 
@@ -274,6 +300,7 @@ async function processScheduledPosts() {
               error: `Failed after 3 attempts. Last error: ${errorMsg}`
             }
           });
+          await updateDraft(post.draftId, { status: 'failed', error: `Failed after 3 attempts. Last error: ${errorMsg}` });
         }
       }
     }

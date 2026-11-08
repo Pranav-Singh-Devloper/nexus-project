@@ -1,19 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
+const { issueSession } = require('../utils/session');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 // Strip the password hash before sending a user to the client
 const publicUser = ({ password, ...rest }) => rest;
-
-// Helper: Generate JWT
-const generateToken = (user) => {
-  return jwt.sign({ id: user.id, email: user.email }, process.env.COOKIE_KEY, {
-    expiresIn: '7d'
-  });
-};
 
 // 1. SIGNUP
 router.post('/signup', async (req, res) => {
@@ -44,14 +37,7 @@ router.post('/signup', async (req, res) => {
       }
     });
 
-    // Issue Token
-    const token = generateToken(user);
-    res.cookie('token', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000
-    });
+    issueSession(res, user);
 
     res.status(201).send(publicUser(user));
 
@@ -85,14 +71,7 @@ router.post('/login', async (req, res) => {
       return res.status(400).send({ error: "Invalid credentials" });
     }
 
-    // Issue Token
-    const token = generateToken(user);
-    res.cookie('token', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000
-    });
+    issueSession(res, user);
 
     res.send(publicUser(user));
 
