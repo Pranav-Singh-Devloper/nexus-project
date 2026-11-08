@@ -4,8 +4,11 @@ import { ThemeContext, THEME_KEY } from '../lib/theme';
 
 const media = () => window.matchMedia('(prefers-color-scheme: dark)');
 
+// Light is the default for everyone; dark (or following the device) only if chosen.
+const DEFAULT_PREFERENCE = 'light';
+
 const readPreference = () => {
-  try { return localStorage.getItem(THEME_KEY) || 'system'; } catch { return 'system'; }
+  try { return localStorage.getItem(THEME_KEY) || DEFAULT_PREFERENCE; } catch { return DEFAULT_PREFERENCE; }
 };
 
 const resolve = (pref, systemDark) => (pref === 'system' ? (systemDark ? 'dark' : 'light') : pref);

@@ -27,9 +27,10 @@
     />
     <script>
       // Apply the saved theme before first paint so there's no flash.
+      // Light is the default; dark only if the visitor chose it.
       (function () {
-        var pref = 'system';
-        try { pref = localStorage.getItem('nexus-theme') || 'system'; } catch (e) {}
+        var pref = 'light';
+        try { pref = localStorage.getItem('nexus-theme') || 'light'; } catch (e) {}
         var dark = pref === 'dark' || (pref === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
         document.documentElement.dataset.theme = dark ? 'dark' : 'light';
       })();

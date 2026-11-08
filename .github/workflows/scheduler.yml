@@ -22,8 +22,8 @@ jobs:
           fi
           # Cold starts can take up to a minute, so retry a few times.
           for i in 1 2 3 4; do
-            code=$(curl -s -o /tmp/out -w '%{http_code}' -m 90 -X POST "$BACKEND_URL/internal/run-scheduler" -H "x-cron-secret: $CRON_SECRET")
-            echo "attempt $i: HTTP $code $(cat /tmp/out)"
+            code=$(curl -s -o /tmp/out -w '%{http_code}' -m 90 -X POST "$BACKEND_URL/internal/run-scheduler" -H "x-cron-secret: $CRON_SECRET" || true)
+            echo "attempt $i: HTTP $code $(cat /tmp/out 2>/dev/null)"
             [ "$code" = "200" ] && exit 0
             sleep 15
           done
