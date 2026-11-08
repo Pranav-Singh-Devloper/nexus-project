@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import operator
 import logging
 import asyncio
@@ -74,7 +75,8 @@ def build_research_agent(api_key: str):
         openai_api_key=api_key,
         openai_api_base="https://api.groq.com/openai/v1",
         temperature=0,
-        max_tokens=2048
+        # Room for the model's reasoning plus a full markdown report.
+        max_tokens=4096
     )
     
     # Tool-bound LLM
@@ -137,6 +139,12 @@ def build_research_agent(api_key: str):
     workflow.add_edge("tools", "agent")
 
     return workflow.compile()
+
+def clean_report(text: str) -> str:
+    """Remove gpt-oss citation markers (e.g. 【0†content】) and stray code fences."""
+    text = re.sub(r"【[^】]*】", "", text or "")
+    text = re.sub(r"^```(?:markdown|md)?\s*\n|\n```\s*$", "", text.strip())
+    return re.sub(r"[ \t]+\n", "\n", text).strip()
 
 # --- API Schemas ---
 class ResearchRequest(BaseModel):
@@ -206,9 +214,15 @@ async def start_research(request: ResearchRequest):
     if not available_keys:
         raise HTTPException(status_code=503, detail="No GROQ_API_KEY configured.")
 
-    system_prompt = """You are an expert market researcher. 
-    Use the search tool for current facts. 
-    After 2 searches, you MUST stop and provide a Markdown report."""
+    system_prompt = """You are an expert market researcher.
+Use the search tool for current facts. After 2 searches, you MUST stop and write the report.
+
+Write the report in clean GitHub-flavoured Markdown:
+- Start with a single "## " title, then short sections with "### " headings.
+- Use bullet or numbered lists for key points and **bold** for key figures.
+- Use Markdown tables for structured data. Keep each table cell on one line; do not use HTML such as <br>.
+- End with a "### Sources" section listing each source as a Markdown link: [Publisher - Title](URL).
+- Do not include citation markers like 【0†source】, and do not wrap the report in code fences."""
 
     initial_state = {
         "messages": [SystemMessage(content=system_prompt), HumanMessage(content=request.prompt)],
@@ -221,7 +235,7 @@ async def start_research(request: ResearchRequest):
             final_state = await agent_app.ainvoke(initial_state, config={"recursion_limit": 10})
             return {
                 "status": "success",
-                "report": final_state["messages"][-1].content
+                "report": clean_report(final_state["messages"][-1].content)
             }
         except HTTPException:
             raise
@@ -252,17 +266,20 @@ async def generate_post(request: GeneratePostRequest):
                 openai_api_key=key,
                 openai_api_base="https://api.groq.com/openai/v1",
                 temperature=0.7,
-                max_tokens=1024,
+                # gpt-oss reasons before answering; those tokens count toward
+                # max_tokens, so a small limit cuts the JSON off mid-way.
+                max_tokens=4096,
+                reasoning_effort="low",
                 model_kwargs={"response_format": {"type": "json_object"}}
             )
 
             messages = [
                 SystemMessage(content=LINKEDIN_POST_PROMPT),
-                HumanMessage(content=f"Transform the following research into a LinkedIn post + image package:\n\n{request.content[:4000]}")
+                HumanMessage(content=f"Transform the following research into a LinkedIn post + image package:\n\n{clean_report(request.content)[:4000]}")
             ]
 
             # Retry loop for JSON validation
-            max_retries = 1
+            max_retries = 2
             for attempt in range(max_retries + 1):
                 try:
                     response = await llm.ainvoke(messages)
@@ -304,6 +321,8 @@ async def generate_post(request: GeneratePostRequest):
                     messages.append(response)
                     messages.append(HumanMessage(content="Your response was not valid JSON. Please return STRICT JSON only matching the exact schema requested without any extra markdown formatting."))
                 except Exception as e:
+                    if "429" in str(e):
+                        raise  # let the outer handler rotate to the backup key
                     logger.warning(f"Validation failed on attempt {attempt}: {e}")
                     if attempt == max_retries:
                         raise HTTPException(status_code=500, detail=str(e))
