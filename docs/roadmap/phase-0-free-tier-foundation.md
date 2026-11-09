@@ -30,17 +30,19 @@ Render's 750 free instance-hours are **shared across a workspace**. Two services
 - [ ] Add a "waking up the server…" state in the client: if the first request takes > 3 s, show a friendly banner instead of a blank page (cold starts take up to a minute).
 - [ ] Delete the Railway services once Render is verified.
 
-### Make scheduled posts work on a sleeping server
-The current `setInterval` scheduler only runs while the process is awake, and on Render it won't be.
-- [ ] When a post is scheduled, register a one-off HTTP callback for its exact time (Upstash QStash free tier, or similar) to `POST /internal/run-scheduler` with a shared secret header. That wakes the server just in time.
-- [ ] Add a cron-job.org (free) or GitHub Actions safety-net ping every 30 min to the same endpoint, to catch anything missed. Don't ping more often: each wake also wakes Neon, and Neon compute-hours are limited.
-- [ ] Remove the always-on `setInterval` loop.
+### Make scheduled posts work on a sleeping server ✅
+The old `setInterval` scheduler only ran while the process was awake (and kept the free database awake too).
+- [x] Due posts are published whenever the server wakes up for **any** request (debounced to once a minute), so no secret or special call is needed.
+- [x] Public `GET /api/wake`: safe to expose, it only publishes posts that are already due.
+- [x] Pingers: cron-job.org (reliable, free) + GitHub Actions `scheduler.yml` as backup, every 30 min. Posts go out within ~30 min of their time (said in the schedule dialog).
+- [x] No interval timer: keeps Neon's 100 compute-hours/month safe.
+- [ ] Optional later: exact-time wake-ups (e.g. Upstash QStash) if 30 minutes isn't precise enough.
 
 ### Protect free allowances
-- [ ] `usage_counters` table: `(provider, day, units)`. Before each Groq / Tavily / WaveSpeed call, check and increment. Refuse with "Daily free limit reached, try again tomorrow" before the provider does.
-- [ ] Per-user limits: e.g. 3 research runs / day, 10 post generations / day (demo users get less, see Phase 1).
-- [ ] Search cache: `search_cache(query_hash, depth, results_json, created_at)`. The agent reads from it first. This also powers reproducible evals in Phase 3.
-- [ ] `AI_MOCK=1` in the AI engine returns canned reports, posts and images instantly (used by tests, CI, `docker compose`, demo).
+- [x] `UsageCounter` table: per-user and site-wide daily (and monthly) counts for research, post and image generation, checked atomically before each call; refunded if the call fails on our side; limits overridable with `LIMIT_<ACTION>_<WINDOW>` env vars.
+- [x] Defaults: research 3/user/day, 8/day site-wide, 200/month; posts 10/user, 40/day; images 10/user, 30/day. `GET /api/usage` + "runs left today" in the UI. (Demo users: Phase 1.)
+- [x] Search cache (`SearchCache` table / JSON-lines file / memory), keyed by normalised query + params, 7-day TTL in production, frozen for evals.
+- [x] `AI_MOCK=1` in the AI engine returns canned reports, posts, images and deterministic vectors instantly.
 
 ### Accounts to create (free, no card)
 - [ ] Langfuse Cloud (Hobby): for Phase 2.

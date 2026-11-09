@@ -15,9 +15,10 @@ const projectRoutes = require('./routes/projectRoutes');
 const noteRoutes = require('./routes/noteRoutes');
 const authRoutes = require('./routes/authRoutes');
 const { router: socialRoutes, processScheduledPosts } = require('./routes/socialRoutes');
+const { consume, sendLimitError, usageSummary } = require('./services/usage');
 const ProviderFactory = require('./services/social/ProviderFactory');
 const crypto = require('crypto');
-const { issueSession, renewSessionIfStale, clearSession } = require('./utils/session');
+const { issueSession, renewSessionIfStale, clearSession, requireAuth } = require('./utils/session');
 const draftRoutes = require('./routes/draftRoutes');
 
 const app = express();
@@ -43,6 +44,22 @@ app.use(session({
 }));
 
 app.use(passport.initialize());
+
+// --- Scheduled posts on free hosting --------------------------------------
+// Render's free plan sleeps the server after 15 idle minutes, so an in-process
+// timer can't be relied on. Instead, due posts are published whenever the
+// server wakes up for any reason (a visitor, a pinger hitting /api/wake, or the
+// cron). Debounced so it runs at most once a minute.
+let lastSchedulerRun = 0;
+function runSchedulerSoon() {
+  if (Date.now() - lastSchedulerRun < 60000) return;
+  lastSchedulerRun = Date.now();
+  processScheduledPosts().catch(err => console.error('[Scheduler]', err.message));
+}
+app.use((req, res, next) => {
+  if (req.path !== '/healthz') runSchedulerSoon();
+  next();
+});
 
 // --- Routes ---
 
@@ -210,8 +227,9 @@ app.post('/api/generate-linkedin-post', async (req, res) => {
   const token = req.cookies.token;
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
 
+  let userId;
   try {
-    jwt.verify(token, process.env.COOKIE_KEY);
+    userId = jwt.verify(token, process.env.COOKIE_KEY).id;
   } catch (err) {
     return res.status(401).json({ error: 'Invalid token' });
   }
@@ -219,6 +237,14 @@ app.post('/api/generate-linkedin-post', async (req, res) => {
   const { content } = req.body;
   if (!content || !content.trim()) {
     return res.status(400).json({ error: 'Content is required' });
+  }
+
+  let release;
+  try {
+    release = await consume(userId, 'post');
+  } catch (err) {
+    if (err.status === 429) return sendLimitError(res, err);
+    return res.status(500).json({ error: 'Could not check usage limits' });
   }
 
   try {
@@ -231,6 +257,7 @@ app.post('/api/generate-linkedin-post', async (req, res) => {
     res.json(response.data);
   } catch (err) {
     console.error('[Generate Post] AI Engine error:', err.response?.data || err.message);
+    await release(); // failed on our side: give it back
     const status = err.response?.status || 500;
     const detail = err.response?.data?.detail || 'Failed to generate post';
     res.status(status).json({ error: detail });
@@ -242,8 +269,9 @@ app.post('/api/generate-image', async (req, res) => {
   const token = req.cookies.token;
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
 
+  let userId;
   try {
-    jwt.verify(token, process.env.COOKIE_KEY);
+    userId = jwt.verify(token, process.env.COOKIE_KEY).id;
   } catch (err) {
     return res.status(401).json({ error: 'Invalid token' });
   }
@@ -251,6 +279,14 @@ app.post('/api/generate-image', async (req, res) => {
   const { prompt, style } = req.body;
   if (!prompt || !prompt.trim()) {
     return res.status(400).json({ error: 'Prompt is required' });
+  }
+
+  let release;
+  try {
+    release = await consume(userId, 'image');
+  } catch (err) {
+    if (err.status === 429) return sendLimitError(res, err);
+    return res.status(500).json({ error: 'Could not check usage limits' });
   }
 
   try {
@@ -263,6 +299,7 @@ app.post('/api/generate-image', async (req, res) => {
     res.json(response.data);
   } catch (err) {
     console.error('[Generate Image] AI Engine error:', err.response?.data || err.message);
+    await release();
     const status = err.response?.status || 500;
     const detail = err.response?.data?.detail || err.response?.data?.error || 'Failed to generate image';
     res.status(status).json({ error: detail });
@@ -276,6 +313,15 @@ app.use('/auth', authRoutes);
 app.use('/api/social', socialRoutes);
 app.use('/api/drafts', draftRoutes);
 
+// Today's usage vs. free-tier limits for the signed-in user (shown in the UI).
+app.get('/api/usage', requireAuth, async (req, res) => {
+  try {
+    res.json(await usageSummary(req.user.id));
+  } catch (err) {
+    res.status(500).json({ error: 'Could not load usage' });
+  }
+});
+
 // --- Free-hosting helpers -------------------------------------------------
 // Render's free plan sleeps the server after 15 idle minutes, so the in-process
 // scheduler below can't be relied on alone. An external cron calls this to wake
@@ -283,11 +329,16 @@ app.use('/api/drafts', draftRoutes);
 app.post('/internal/run-scheduler', async (req, res) => {
   const secret = process.env.CRON_SECRET;
   if (!secret || req.get('x-cron-secret') !== secret) return res.status(401).json({ error: 'Unauthorized' });
+  lastSchedulerRun = Date.now();
   await processScheduledPosts();
   res.json({ ok: true, ranAt: new Date().toISOString() });
 });
 
 app.get('/healthz', (req, res) => res.json({ ok: true }));
+
+// Public, secret-free wake-up for external pingers (cron-job.org, GitHub Actions).
+// Safe to expose: it only publishes posts that are already due, at most once a minute.
+app.get('/api/wake', (req, res) => res.json({ ok: true, at: new Date().toISOString() }));
 
 // The AI engine also sleeps when idle. Opening the dashboard nudges it awake
 // so it's ready by the time the user starts research or generates a post.
@@ -302,7 +353,7 @@ const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT} (JWT Mode)`);
 
-  // Start scheduled post processor — runs every 60 seconds
-  setInterval(processScheduledPosts, 60000);
-  console.log('Scheduler started: checking for due posts every 60s');
+  // No interval timer on purpose: polling would keep the free Neon database awake
+  // (100 compute-hours/month). Due posts run on any request and on /api/wake pings.
+  console.log('Scheduler: runs on wake-up and on requests (at most once a minute)');
 });

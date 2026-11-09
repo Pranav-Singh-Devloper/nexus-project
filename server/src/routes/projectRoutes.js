@@ -3,6 +3,7 @@ const router = express.Router();
 const { PrismaClient } = require('@prisma/client');
 const axios = require('axios');
 const { embed, toPgVector } = require('../services/embeddings');
+const { consume, sendLimitError } = require('../services/usage');
 const prisma = new PrismaClient();
 const jwt = require('jsonwebtoken');
 
@@ -159,6 +160,15 @@ router.post('/', requireAuth, async (req, res) => {
 
   if (!title || !title.trim()) return res.status(400).send({ error: 'Title required' });
 
+  // Free-tier guard: refuse before doing any work if a daily limit is reached.
+  let release;
+  try {
+    release = await consume(req.user.id, 'research');
+  } catch (err) {
+    if (err.status === 429) return sendLimitError(res, err);
+    throw err;
+  }
+
   try {
     // A. Create Draft (Initial "Initializing" state)
     const project = await prisma.project.create({
@@ -175,6 +185,7 @@ router.post('/', requireAuth, async (req, res) => {
     // C. Background Task with RETRY LOGIC
     (async () => {
       if (!aiServiceUrl) {
+        await release();
         await prisma.project.update({
           where: { id: project.id },
           data: { status: 'Failed', report: 'AI service is not configured on the server (AI_SERVICE_URL is missing).' }
@@ -217,6 +228,7 @@ router.post('/', requireAuth, async (req, res) => {
             where: { id: project.id },
             data: { status: 'Failed', report: `${reason}\n\nError details: ${detail}` }
           });
+          await release(); // failed on our side: give the free run back
           return;
         }
 
@@ -248,6 +260,7 @@ router.post('/', requireAuth, async (req, res) => {
 
   } catch (err) {
     console.error(err);
+    await release();
     res.status(500).send({ error: 'Creation failed' });
   }
 });

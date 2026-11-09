@@ -116,3 +116,27 @@ model Note {
   projectId String
   project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 }
+
+// Daily / monthly usage counts that keep Nexus inside free-tier API limits.
+// scope is "global" or a user id; period is "2026-11-09" (day) or "2026-11" (month).
+model UsageCounter {
+  scope     String
+  action    String
+  period    String
+  count     Int      @default(0)
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@id([scope, action, period])
+}
+
+// Cached web-search results (written by the AI engine). Saves Tavily credits and
+// makes evaluation runs reproducible.
+model SearchCache {
+  key       String   @id
+  query     String
+  params    Json
+  results   Json
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}

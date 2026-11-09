@@ -126,6 +126,16 @@ const Dashboard = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [creating, setCreating] = useState(false);
+  const [usage, setUsage] = useState(null);
+
+  // How many free research runs are left today (shown in the launch dialog)
+  useEffect(() => {
+    if (!isModalOpen) return;
+    axios.get(`${API_URL}/api/usage`, { withCredentials: true })
+      .then(res => setUsage(res.data.research))
+      .catch(() => setUsage(null));
+  }, [isModalOpen]);
+  const runsLeft = usage ? Math.max(0, usage.limit - usage.used) : null;
 
   const [selectedProject, setSelectedProject] = useState(null);
   const [projectNotes, setProjectNotes] = useState([]);
@@ -200,8 +210,9 @@ const Dashboard = () => {
       setFilterStatus('All');
       if (page === 1) fetchProjects(); else setPage(1);
       toast.success('Agent launched. Your report will appear here when it is ready.');
-    } catch {
-      toast.error('Failed to launch the research agent.');
+    } catch (err) {
+      // 429 = a free-tier daily limit; the server explains which one.
+      toast.error(err.response?.data?.error || 'Failed to launch the research agent.');
     } finally {
       setCreating(false);
     }
@@ -335,9 +346,13 @@ const Dashboard = () => {
         description="Describe what you want to know. The agent researches the web and writes a cited report."
         footer={(
           <>
-            <span className="mr-auto hidden text-xs text-muted sm:block">⌘ + Enter to launch</span>
+            <span className="mr-auto text-xs text-muted">
+              {runsLeft !== null
+                ? `${runsLeft} of ${usage.limit} free research runs left today`
+                : <span className="hidden sm:inline">⌘ + Enter to launch</span>}
+            </span>
             <Button variant="ghost" onClick={() => setIsModalOpen(false)} disabled={creating}>Cancel</Button>
-            <Button variant="accent" icon={Rocket} onClick={handleCreate} loading={creating} disabled={!newTitle.trim()}>Launch</Button>
+            <Button variant="accent" icon={Rocket} onClick={handleCreate} loading={creating} disabled={!newTitle.trim() || runsLeft === 0}>Launch</Button>
           </>
         )}
       >

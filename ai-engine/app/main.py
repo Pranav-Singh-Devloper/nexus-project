@@ -21,6 +21,8 @@ from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, Ba
 from langgraph.graph import StateGraph, END
 from fastembed import TextEmbedding
 
+from app import search_cache, mock
+
 # --- Setup ---
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -40,6 +42,8 @@ app.add_middleware(
 # Groq retires models regularly; override with GROQ_MODEL instead of editing code.
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
+# Must match TavilySearch(...) in get_tavily_tool(); part of the search cache key.
+SEARCH_PARAMS = {"depth": "advanced", "max_results": 3}
 
 # --- Global Tools & Embeddings (created lazily) ---
 # Created on first use so the server always starts, even if an API key is
@@ -171,7 +175,11 @@ def build_research_agent(api_key: str):
                 try:
                     # Small delay to respect Groq rate limits
                     await asyncio.sleep(1)
-                    result = await tavily_tool.ainvoke({"query": query})
+                    result = await search_cache.cached_search(
+                        lambda q: tavily_tool.ainvoke({"query": q}),
+                        query,
+                        SEARCH_PARAMS,
+                    )
                     trimmed_result = format_search_results(result)
                 except Exception as e:
                     trimmed_result = f"Search Error: {str(e)}"
@@ -310,6 +318,8 @@ def health():
         "configured": {k: bool(os.getenv(k)) for k in keys},
         "embeddings_loaded": _embeddings_model is not None,
         "memory_mb": _memory_mb(),
+        "mock": mock.enabled(),
+        "search_cache": {"backend": search_cache.backend().name, **search_cache.stats},
     }
 
 
@@ -324,6 +334,8 @@ def _memory_mb():
 
 @app.post("/start-research")
 async def start_research(request: ResearchRequest):
+    if mock.enabled():
+        return {"status": "success", "report": mock.report(request.prompt)}
     api_keys = [os.getenv("GROQ_API_KEY"), os.getenv("GROQ_API_KEY_BACKUP")]
     available_keys = [k for k in api_keys if k]
     if not available_keys:
@@ -365,6 +377,8 @@ Write the report in clean GitHub-flavoured Markdown:
 
 @app.post("/generate-post")
 async def generate_post(request: GeneratePostRequest):
+    if mock.enabled():
+        return mock.post(request.content)
     if not request.content or not request.content.strip():
         raise HTTPException(status_code=400, detail="Content is required.")
 
@@ -455,6 +469,8 @@ async def generate_post(request: GeneratePostRequest):
 
 @app.post("/generate-image")
 async def generate_image(request: GenerateImageRequest):
+    if mock.enabled():
+        return mock.image(request.prompt)
     img_api_key = os.getenv("WAVESPEED_API_KEY")
     if not img_api_key:
         raise HTTPException(status_code=500, detail="Image generation API key not configured.")
@@ -500,6 +516,9 @@ async def generate_image(request: GenerateImageRequest):
 
 @app.post("/create-vector")
 def create_vector(request: VectorRequest):
+    if mock.enabled():
+        vector = mock.vector(request.text)
+        return {"status": "success", "vector_length": len(vector), "vector": vector}
     try:
         # This converts the report text into a list of floats
         vector = next(iter(get_embeddings_model().query_embed(request.text))).tolist()

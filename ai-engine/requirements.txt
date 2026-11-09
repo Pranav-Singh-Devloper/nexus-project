@@ -9,3 +9,4 @@ langchain-openai
 langchain-tavily
 langgraph
 fastembed
+psycopg[binary]

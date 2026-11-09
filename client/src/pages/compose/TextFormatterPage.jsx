@@ -186,8 +186,9 @@ const TextFormatterPage = () => {
       setImageUrl(newUrl);
       dirty.current = true;
       if (!newUrl) toast.error('Image generation returned no image. Try again.');
-    } catch {
-      toast.error('Failed to generate companion image.');
+    } catch (err) {
+      // 429 = a free-tier daily limit; the server explains which one.
+      toast.error(err.response?.data?.error || 'Failed to generate companion image.');
     } finally {
       setIsGeneratingImage(false);
     }

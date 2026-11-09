@@ -1,5 +1,7 @@
-# Wakes the backend (free hosting sleeps it) and publishes any scheduled posts that are due.
-# Every 30 minutes keeps it well inside Render's and Neon's free monthly allowances.
+# Wakes the backend (free hosting sleeps it). Any wake-up publishes scheduled
+# posts that are due (see runSchedulerSoon in server/src/index.js).
+# Backup pinger: GitHub's scheduled runs can be delayed or skipped, so a
+# cron-job.org job hits the same URL as the main one.
 name: scheduler
 
 on:
@@ -8,21 +10,18 @@ on:
   workflow_dispatch:
 
 jobs:
-  run:
+  wake:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 6
     steps:
-      - name: Wake backend and run scheduler
+      - name: Wake backend
         env:
           BACKEND_URL: ${{ secrets.BACKEND_URL }}
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          if [ -z "$BACKEND_URL" ] || [ -z "$CRON_SECRET" ]; then
-            echo "BACKEND_URL / CRON_SECRET secrets not set; skipping."; exit 0
-          fi
+          URL="${BACKEND_URL:-https://nexus-backend-nwvq.onrender.com}/api/wake"
           # Cold starts can take up to a minute, so retry a few times.
-          for i in 1 2 3 4; do
-            code=$(curl -s -o /tmp/out -w '%{http_code}' -m 90 -X POST "$BACKEND_URL/internal/run-scheduler" -H "x-cron-secret: $CRON_SECRET" || true)
+          for i in 1 2 3; do
+            code=$(curl -s -o /tmp/out -w '%{http_code}' -m 90 "$URL" || true)
             echo "attempt $i: HTTP $code $(cat /tmp/out 2>/dev/null)"
             [ "$code" = "200" ] && exit 0
             sleep 15

@@ -51,7 +51,7 @@ const ScheduleModal = ({ isOpen, onClose, onConfirm, isScheduling }) => {
       open={isOpen}
       onClose={isScheduling ? undefined : onClose}
       title="Schedule post"
-      description="Pick when it should go live. Times are in your local time zone."
+      description="Pick when it should go live (your local time). On the free plan, posts go out within 30 minutes of the time you pick."
       size="sm"
       footer={(
         <>
